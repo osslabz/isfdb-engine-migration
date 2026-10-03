@@ -128,6 +128,7 @@ analyze_converted_tables() {
         print_info "✓ All ${total_tables} table(s) analyzed successfully"
     else
         print_warn "⚠ ${analyze_failed} table(s) failed to analyze, $((total_tables - analyze_failed)) succeeded"
+        return 1
     fi
 }
 
@@ -225,6 +226,8 @@ warmup_buffer_pool() {
     else
         print_warn "⚠ ${failed_count} table(s) had failures, ${success_count} succeeded"
         print_info "Successful queries: ${CYAN}$((total_queries - failed_queries))${NC}/${total_queries}"
+        echo ""
+        return 1
     fi
     echo ""
 }
@@ -310,7 +313,10 @@ main() {
     # Discover MyISAM tables
     print_header "Discovering MyISAM Tables"
 
-    MYISAM_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "MyISAM")
+    MYISAM_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "MyISAM") || {
+        print_error "Failed to query database: $MYISAM_TABLES"
+        exit 1
+    }
     MIGRATION_NEEDED=0
 
     if [ -z "$MYISAM_TABLES" ]; then
@@ -319,7 +325,10 @@ main() {
 
         # Get existing InnoDB tables for optimization/warmup
         print_header "Existing InnoDB Tables"
-        INNODB_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "InnoDB")
+        INNODB_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "InnoDB") || {
+            print_error "Failed to query database: $INNODB_TABLES"
+            exit 1
+        }
 
         if [ -z "$INNODB_TABLES" ]; then
             print_warn "No InnoDB tables found in database"
@@ -393,6 +402,7 @@ main() {
 
     # Start migration (only if MyISAM tables found)
     FAILED_TABLES=""
+    FOLLOW_UP_FAILED=0
     if [ "$MIGRATION_NEEDED" -eq 1 ]; then
         echo ""
         print_header "Starting Migration"
@@ -445,13 +455,13 @@ main() {
     # Analyze tables (if requested or after migration)
     if [ "$RUN_ANALYZE" = "yes" ] && [ -z "$FAILED_TABLES" ]; then
         echo ""
-        analyze_converted_tables "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS"
+        analyze_converted_tables "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" || FOLLOW_UP_FAILED=1
     fi
 
     # Warm up buffer pool (if requested or after migration)
     if [ "$RUN_WARMUP" = "yes" ] && [ -z "$FAILED_TABLES" ]; then
         echo ""
-        warmup_buffer_pool "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS"
+        warmup_buffer_pool "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" || FOLLOW_UP_FAILED=1
     fi
 
     # Show final table sizes
@@ -481,7 +491,7 @@ main() {
     print_info "✓ Done!"
     echo ""
 
-    [ -z "$FAILED_TABLES" ] || exit 1
+    [ -z "$FAILED_TABLES" ] && [ "$FOLLOW_UP_FAILED" -eq 0 ] || exit 1
 }
 
 # Run main
