@@ -463,6 +463,8 @@ main() {
         # Show sizes for migrated tables
         echo ""
         show_final_sizes "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" "${TOTAL_SIZE}"
+        # The recommendation needs the InnoDB size, not the MyISAM size from before the migration
+        TOTAL_SIZE=$(get_total_size "${MYSQL_CMD}" "${DB_NAME}" "InnoDB")
     elif [ "$RUN_ANALYZE" = "yes" ] || [ "$RUN_WARMUP" = "yes" ]; then
         # Show sizes for existing InnoDB tables after operations
         echo ""
