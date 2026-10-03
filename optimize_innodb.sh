@@ -112,16 +112,18 @@ optimize_all_tables() {
 
     START_TIME=$(date +%s)
     local current=0
+    local output
     OPTIMIZE_FAILED=0
 
     while IFS= read -r table; do
         current=$((current + 1))
         echo -e "${CYAN}[${current}/${TOTAL_TABLES}]${NC} Optimizing ${CYAN}${table}${NC}..."
 
-        if optimize_table "${MYSQL_CMD}" "${DB_NAME}" "$table" > /dev/null 2>&1; then
+        if output=$(optimize_table "${MYSQL_CMD}" "${DB_NAME}" "$table"); then
             print_info "✓ Optimized ${CYAN}${table}${NC}"
         else
             print_warn "⚠ Failed to optimize ${CYAN}${table}${NC}"
+            echo "$output" | sed 's/^/    /'
             OPTIMIZE_FAILED=$((OPTIMIZE_FAILED + 1))
         fi
     done <<< "$INNODB_TABLES"

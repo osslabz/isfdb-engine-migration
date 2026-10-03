@@ -112,16 +112,18 @@ analyze_all_tables() {
 
     START_TIME=$(date +%s)
     local current=0
+    local output
     ANALYZE_FAILED=0
 
     while IFS= read -r table; do
         current=$((current + 1))
         echo -e "${CYAN}[${current}/${TOTAL_TABLES}]${NC} Analyzing ${CYAN}${table}${NC}..."
 
-        if analyze_table "${MYSQL_CMD}" "${DB_NAME}" "$table" > /dev/null 2>&1; then
+        if output=$(analyze_table "${MYSQL_CMD}" "${DB_NAME}" "$table"); then
             print_info "✓ Analyzed ${CYAN}${table}${NC}"
         else
             print_warn "⚠ Failed to analyze ${CYAN}${table}${NC}"
+            echo "$output" | sed 's/^/    /'
             ANALYZE_FAILED=$((ANALYZE_FAILED + 1))
         fi
     done <<< "$INNODB_TABLES"
