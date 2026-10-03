@@ -175,8 +175,14 @@ connect_mysql() {
     print_header "MySQL Authentication Setup"
 
     if [ -n "$DB_USER" ] || [ -n "$DEFAULTS_EXTRA_FILE" ]; then
-        if ! command -v mysql &> /dev/null; then
-            print_error "mysql client not found!"
+        # MariaDB 11+ ships only `mariadb`
+        local client
+        for client in mysql mariadb; do
+            command -v "$client" &> /dev/null && break
+            client=""
+        done
+        if [ -z "$client" ]; then
+            print_error "mysql or mariadb client not found!"
             return 1
         fi
         if [ -n "$DEFAULTS_EXTRA_FILE" ] && [ ! -r "$DEFAULTS_EXTRA_FILE" ]; then
@@ -184,7 +190,7 @@ connect_mysql() {
             return 1
         fi
         # --defaults-extra-file must be the first mysql option
-        MYSQL_CMD="mysql"
+        MYSQL_CMD="${client}"
         CONNECTION_LABEL="credentials from options/environment"
         [ -n "$DEFAULTS_EXTRA_FILE" ] && MYSQL_CMD="${MYSQL_CMD} --defaults-extra-file=${DEFAULTS_EXTRA_FILE}"
         [ -n "$DB_USER" ] && MYSQL_CMD="${MYSQL_CMD} --user=${DB_USER}"

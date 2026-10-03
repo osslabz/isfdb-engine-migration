@@ -14,7 +14,7 @@ MySQL InnoDB migration and analysis tools for the Internet Speculative Fiction D
 ## Prerequisites
 
 - MySQL 5.6+ or MariaDB 10.0+
-- `mysql` client; `mysql_config_editor` only when you use a login-path
+- `mysql` or `mariadb` client; `mysql_config_editor` (MySQL only) only when you use a login-path
 - Bash 4.0+
 
 ## Setup
