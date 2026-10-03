@@ -568,32 +568,36 @@ get_table_info() {
     "
 }
 
-# Analyze table (updates index statistics)
-# Args: $1 = mysql command, $2 = database name, $3 = table name
-analyze_table() {
+# Run a table maintenance statement (ANALYZE/OPTIMIZE TABLE) and print its result rows
+# The mysql client exits 0 even when a result row reports an error, so the rows are checked too.
+# Fails when the client fails or any row has Msg_type error or a status other than OK.
+# Args: $1 = mysql command, $2 = database name, $3 = statement (e.g. ANALYZE), $4 = table name
+run_table_maintenance() {
     local mysql_cmd="$1"
     local db_name="$2"
-    local table_name="$3"
-
-    ${mysql_cmd} -D "${db_name}" -e "ANALYZE TABLE \`${table_name}\`;" 2>&1
-}
-
-# Optimize table (on InnoDB: rebuild + analyze)
-# Fails when the client fails or any result row reports an error or a status other than OK
-# Args: $1 = mysql command, $2 = database name, $3 = table name
-optimize_table() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-    local table_name="$3"
+    local statement="$3"
+    local table_name="$4"
 
     local output
-    output=$(${mysql_cmd} -D "${db_name}" -e "OPTIMIZE TABLE \`${table_name}\`;" 2>&1) || {
+    output=$(${mysql_cmd} -D "${db_name}" -e "${statement} TABLE \`${table_name}\`;" 2>&1) || {
         echo "$output"
         return 1
     }
     echo "$output"
     # Result columns: Table, Op, Msg_type, Msg_text
     awk -F'\t' 'NR > 1 && (tolower($3) == "error" || (tolower($3) == "status" && $4 != "OK")) { bad = 1 } END { exit bad }' <<< "$output"
+}
+
+# Analyze table (updates index statistics)
+# Args: $1 = mysql command, $2 = database name, $3 = table name
+analyze_table() {
+    run_table_maintenance "$1" "$2" "ANALYZE" "$3"
+}
+
+# Optimize table (on InnoDB: rebuild + analyze)
+# Args: $1 = mysql command, $2 = database name, $3 = table name
+optimize_table() {
+    run_table_maintenance "$1" "$2" "OPTIMIZE" "$3"
 }
 
 # =====================================================
