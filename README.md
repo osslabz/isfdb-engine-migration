@@ -64,7 +64,7 @@ The scripts exit non-zero if the connection fails or a table cannot be converted
 The migration script:
 - Discovers all MyISAM tables in the `isfdb` database
 - Fixes invalid dates (required for InnoDB strict mode)
-- Handles FULLTEXT indexes (drops before conversion, recreates after)
+- Keeps FULLTEXT indexes (MySQL 5.6+ and MariaDB 10.0+ convert them with the table)
 - Converts tables to InnoDB
 - Analyzes converted tables (updates index statistics)
 - Provides buffer pool configuration recommendations

@@ -441,26 +441,8 @@ check_and_fix_dates() {
 }
 
 # =====================================================
-# FULLTEXT INDEX MANAGEMENT
+# INDEX MANAGEMENT
 # =====================================================
-
-# Get FULLTEXT indexes for a table
-# Args: $1 = mysql command, $2 = database name, $3 = table name
-# Returns: index_name:columns (one per line)
-get_fulltext_indexes() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-    local table_name="$3"
-
-    ${mysql_cmd} -D "${db_name}" -s -N -e "
-        SELECT CONCAT(INDEX_NAME, ':', GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','))
-        FROM information_schema.STATISTICS
-        WHERE TABLE_SCHEMA = '${db_name}'
-        AND TABLE_NAME = '${table_name}'
-        AND INDEX_TYPE = 'FULLTEXT'
-        GROUP BY INDEX_NAME;
-    " 2>&1
-}
 
 # Get regular indexes (non-FULLTEXT, including PRIMARY) for a table
 # Args: $1 = mysql command, $2 = database name, $3 = table name
@@ -536,43 +518,6 @@ warmup_index() {
 
     # Return format: duration:precision:exit_code
     echo "${duration}:${time_precision}:${exit_code}"
-}
-
-# Drop a FULLTEXT index
-# Args: $1 = mysql command, $2 = database name, $3 = table name, $4 = index name
-drop_fulltext_index() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-    local table_name="$3"
-    local index_name="$4"
-
-    ${mysql_cmd} -D "${db_name}" -e "ALTER TABLE \`${table_name}\` DROP INDEX \`${index_name}\`;" > /dev/null 2>&1
-}
-
-# Create a FULLTEXT index
-# Args: $1 = mysql command, $2 = database name, $3 = table name, $4 = index name, $5 = columns (comma-separated)
-create_fulltext_index() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-    local table_name="$3"
-    local index_name="$4"
-    local columns="$5"
-
-    ${mysql_cmd} -D "${db_name}" -e "ALTER TABLE \`${table_name}\` ADD FULLTEXT INDEX \`${index_name}\` (${columns});" > /dev/null 2>&1
-}
-
-# Check MySQL version for FULLTEXT support in InnoDB
-# Args: $1 = mysql version string
-# Returns: 0 if supported (5.6+), 1 if not
-check_fulltext_support() {
-    local version="$1"
-    local major=$(echo "$version" | cut -d. -f1)
-    local minor=$(echo "$version" | cut -d. -f2)
-
-    if [ "$major" -gt 5 ] || ([ "$major" -eq 5 ] && [ "$minor" -ge 6 ]); then
-        return 0
-    fi
-    return 1
 }
 
 # =====================================================
