@@ -570,7 +570,8 @@ get_table_info() {
 
 # Run a table maintenance statement (ANALYZE/OPTIMIZE TABLE) and print its result rows
 # The mysql client exits 0 even when a result row reports an error, so the rows are checked too.
-# Fails when the client fails or any row has Msg_type error or a status other than OK.
+# Fails when the client fails or any row has Msg_type error or a status other than
+# "OK" or "Table is already up to date" (what MySQL and MariaDB report on success).
 # Args: $1 = mysql command, $2 = database name, $3 = statement (e.g. ANALYZE), $4 = table name
 run_table_maintenance() {
     local mysql_cmd="$1"
@@ -585,7 +586,7 @@ run_table_maintenance() {
     }
     echo "$output"
     # Result columns: Table, Op, Msg_type, Msg_text
-    awk -F'\t' 'NR > 1 && (tolower($3) == "error" || (tolower($3) == "status" && $4 != "OK")) { bad = 1 } END { exit bad }' <<< "$output"
+    awk -F'\t' 'NR > 1 && (tolower($3) == "error" || (tolower($3) == "status" && $4 != "OK" && $4 != "Table is already up to date")) { bad = 1 } END { exit bad }' <<< "$output"
 }
 
 # Analyze table (updates index statistics)
