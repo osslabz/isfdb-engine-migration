@@ -651,6 +651,8 @@ get_buffer_pool_size() {
 get_system_ram() {
     if command -v free &> /dev/null; then
         free -m | awk '/^Mem:/{print $2}'
+    elif [ -r /proc/meminfo ]; then
+        awk '/^MemTotal:/{print int($2 / 1024)}' /proc/meminfo
     elif command -v sysctl &> /dev/null; then
         # macOS
         local ram_bytes
@@ -673,9 +675,9 @@ calculate_recommended_buffer_pool() {
 
     # Convert float to int for comparison
     local db_size_int=$(printf "%.0f" "$db_size")
-    local db_size_times_1_2=$(printf "%.0f" $(echo "$db_size * 1.2" | bc))
+    local db_size_times_1_2=$(awk -v s="$db_size" 'BEGIN { printf "%.0f", s * 1.2 }')
 
-    if [ $(echo "$db_size > $recommended_max" | bc -l) -eq 1 ]; then
+    if awk -v s="$db_size" -v m="$recommended_max" 'BEGIN { exit !(s > m) }'; then
         # If DB is larger than 80% of RAM, recommend 80% of RAM
         echo "$recommended_max"
     elif [ "$db_size_times_1_2" -lt "$recommended_min" ]; then
@@ -758,7 +760,7 @@ display_innodb_recommendations() {
 estimate_migration_time() {
     local total_size="$1"
     # Estimate: ~3 minutes per 100MB
-    local minutes=$(echo "scale=0; ${total_size} / 100 * 3" | bc)
+    local minutes=$(awk -v s="$total_size" 'BEGIN { print int(s / 100) * 3 }')
     [ "$minutes" -lt 1 ] && minutes=1
     echo "$minutes"
 }
@@ -829,13 +831,13 @@ display_space_difference() {
     local size_before="$1"
     local size_after="$2"
 
-    local space_saved=$(echo "$size_before - $size_after" | bc)
+    local space_saved=$(awk -v b="$size_before" -v a="$size_after" 'BEGIN { print b - a }')
 
-    if [ $(echo "$space_saved > 0" | bc) -eq 1 ]; then
-        local percent_saved=$(echo "scale=1; $space_saved * 100 / $size_before" | bc)
+    if awk -v d="$space_saved" 'BEGIN { exit !(d > 0) }'; then
+        local percent_saved=$(awk -v d="$space_saved" -v b="$size_before" 'BEGIN { printf "%.1f", d * 100 / b }')
         print_info "Space reclaimed: ${GREEN}${space_saved} MB${NC} (${percent_saved}%)"
-    elif [ $(echo "$space_saved < 0" | bc) -eq 1 ]; then
-        local space_increased=$(echo "$space_saved * -1" | bc)
+    elif awk -v d="$space_saved" 'BEGIN { exit !(d < 0) }'; then
+        local space_increased=$(awk -v d="$space_saved" 'BEGIN { print -d }')
         print_warn "Size increased: ${YELLOW}${space_increased} MB${NC} (InnoDB overhead)"
     else
         print_info "Size unchanged"
