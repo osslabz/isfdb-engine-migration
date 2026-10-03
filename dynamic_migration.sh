@@ -408,9 +408,6 @@ main() {
         print_header "Starting Migration"
         START_TIME=$(date +%s)
 
-        print_step "Disabling foreign key checks..."
-        set_foreign_key_checks "${MYSQL_CMD}" "${DB_NAME}" 0
-
         CURRENT=0
 
         # Convert each table
@@ -422,9 +419,6 @@ main() {
             fi
 
         done <<< "$TABLES_TO_PROCESS"
-
-        print_step "Re-enabling foreign key checks..."
-        set_foreign_key_checks "${MYSQL_CMD}" "${DB_NAME}" 1
 
         END_TIME=$(date +%s)
         TOTAL_DURATION=$((END_TIME - START_TIME))

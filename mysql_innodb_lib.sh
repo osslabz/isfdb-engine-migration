@@ -596,16 +596,6 @@ optimize_table() {
     awk -F'\t' 'NR > 1 && (tolower($3) == "error" || (tolower($3) == "status" && $4 != "OK")) { bad = 1 } END { exit bad }' <<< "$output"
 }
 
-# Set foreign key checks
-# Args: $1 = mysql command, $2 = database name, $3 = on/off (0 or 1)
-set_foreign_key_checks() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-    local enabled="$3"
-
-    ${mysql_cmd} -D "${db_name}" -e "SET FOREIGN_KEY_CHECKS=${enabled};" > /dev/null 2>&1
-}
-
 # =====================================================
 # INNODB CONFIGURATION ANALYSIS
 # =====================================================
