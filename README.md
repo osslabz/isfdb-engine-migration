@@ -117,6 +117,8 @@ Both scripts provide InnoDB buffer pool sizing recommendations based on:
 - Current database size
 - MySQL best practices (typically 70-80% of RAM for dedicated servers)
 
+The recommendation is never below 128 MB, MySQL's default.
+
 Apply recommendations in your MySQL configuration:
 
 ```ini

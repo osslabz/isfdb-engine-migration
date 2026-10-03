@@ -626,9 +626,12 @@ get_system_ram() {
     fi
 }
 
+# Smallest recommendation, MySQL's default innodb_buffer_pool_size
+MIN_BUFFER_POOL_MB=128
+
 # Calculate recommended buffer pool size
 # Args: $1 = total RAM in MB, $2 = database size in MB
-# Returns: recommended size in MB
+# Returns: recommended size in MB, at least MIN_BUFFER_POOL_MB
 calculate_recommended_buffer_pool() {
     local total_ram="$1"
     local db_size="$2"
@@ -636,20 +639,24 @@ calculate_recommended_buffer_pool() {
     local recommended_min=$((total_ram * 70 / 100))
     local recommended_max=$((total_ram * 80 / 100))
 
-    # Convert float to int for comparison
-    local db_size_int=$(printf "%.0f" "$db_size")
-    local db_size_times_1_2=$(awk -v s="$db_size" 'BEGIN { printf "%.0f", s * 1.2 }')
+    # DB size plus 20% headroom, rounded up so a small DB never ends at 0
+    local db_size_times_1_2
+    db_size_times_1_2=$(awk -v s="$db_size" 'BEGIN { v = s * 1.2; c = int(v); if (v > c) c++; print c }')
 
+    local recommended
     if awk -v s="$db_size" -v m="$recommended_max" 'BEGIN { exit !(s > m) }'; then
         # If DB is larger than 80% of RAM, recommend 80% of RAM
-        echo "$recommended_max"
+        recommended="$recommended_max"
     elif [ "$db_size_times_1_2" -lt "$recommended_min" ]; then
         # If DB is much smaller, recommend DB size * 1.2
-        echo "$db_size_times_1_2"
+        recommended="$db_size_times_1_2"
     else
         # Otherwise recommend 70% of RAM
-        echo "$recommended_min"
+        recommended="$recommended_min"
     fi
+
+    [ "$recommended" -lt "$MIN_BUFFER_POOL_MB" ] && recommended="$MIN_BUFFER_POOL_MB"
+    echo "$recommended"
 }
 
 # Display InnoDB configuration recommendations
