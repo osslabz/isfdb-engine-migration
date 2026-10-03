@@ -13,7 +13,7 @@ MySQL InnoDB migration and analysis tools for the Internet Speculative Fiction D
 ## Prerequisites
 
 - MySQL 5.6+ or MariaDB 10.0+
-- `mysql_config_editor` (comes with MySQL client tools)
+- `mysql` client; `mysql_config_editor` only when you use a login-path
 - Bash 4.0+
 
 ## Setup
@@ -35,6 +35,22 @@ Verify your login-path:
 ```bash
 mysql_config_editor print --all
 ```
+
+## Options
+
+All scripts take the same options:
+
+| Option | Effect |
+|--------|--------|
+| `[login-path]` | Login-path to connect with (default `isfdb_local`) |
+| `--yes`, `-y` | Answer every confirmation with yes and never prompt. Same as `ISFDB_ASSUME_YES=1` |
+| `--user NAME` | Connect as `NAME` instead of using a login-path |
+| `--defaults-extra-file FILE` | Read credentials from a MySQL option file instead of using a login-path (path without spaces) |
+
+`--user` and `--defaults-extra-file` replace the login-path, so `mysql_config_editor` is not needed.
+The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
+Without `--yes`, the scripts prompt as usual. With `--yes` a missing login-path is an error instead of a setup prompt.
+The scripts exit non-zero if the connection fails or a table cannot be converted or analyzed.
 
 ## Usage
 
@@ -74,6 +90,19 @@ The analysis script:
 # Use a specific login-path
 ./dynamic_migration.sh production
 ./analyze_innodb.sh production
+```
+
+### Unattended (e.g. inside the `mysql` Docker image)
+
+```bash
+docker compose exec -T isfdb sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" /isfdb-scripts/dynamic_migration.sh --yes --user root'
+```
+
+Or with a credentials file:
+
+```bash
+./dynamic_migration.sh --yes --defaults-extra-file /run/secrets/isfdb.cnf
 ```
 
 ## Database Configuration

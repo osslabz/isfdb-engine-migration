@@ -10,7 +10,6 @@ source "${SCRIPT_DIR}/mysql_innodb_lib.sh"
 
 # Configuration
 DB_NAME="isfdb"
-LOGIN_PATH="${1:-isfdb_local}"
 
 # =====================================================
 # Main Migration Functions
@@ -26,7 +25,7 @@ confirm_migration() {
     print_header "Migration Confirmation"
     echo ""
     echo -e "Database:     ${CYAN}${DB_NAME}${NC}"
-    echo -e "Login-path:   ${CYAN}${LOGIN_PATH}${NC}"
+    echo -e "Connection:   ${CYAN}${CONNECTION_LABEL}${NC}"
     echo -e "Tables:       ${CYAN}${total_tables}${NC} MyISAM → InnoDB"
     echo -e "Total size:   ${CYAN}${total_size} MB${NC}"
     echo -e "Est. time:    ${CYAN}~${estimated_minutes} minutes${NC}"
@@ -34,9 +33,8 @@ confirm_migration() {
     print_warn "⚠  The database will be locked during conversion"
     print_warn "⚠  Make sure you have a backup before proceeding"
     echo ""
-    read -p "Do you want to proceed with migration? (yes/no): " CONFIRM
 
-    if [ "$CONFIRM" != "yes" ]; then
+    if ! confirm "Do you want to proceed with migration?"; then
         print_info "Migration cancelled"
         return 1
     fi
@@ -304,14 +302,8 @@ verify_migration() {
 # =====================================================
 
 main() {
-    # Setup and connection
-    print_header "MySQL Authentication Setup"
-
-    check_mysql_tools || exit 1
-    setup_login_path "${LOGIN_PATH}" || exit 1
-
-    MYSQL_CMD="mysql --login-path=${LOGIN_PATH}"
-    MYSQL_VERSION=$(test_mysql_connection "${MYSQL_CMD}") || exit 1
+    parse_connection_args "$@" || exit 1
+    connect_mysql || exit 1
 
     echo ""
 
@@ -349,8 +341,8 @@ main() {
         # Ask user what they want to do
         print_header "Available Operations"
         echo ""
-        read -r -p "Would you like to analyze existing InnoDB tables? (yes/no): " RUN_ANALYZE
-        read -r -p "Would you like to warm up the buffer pool? (yes/no): " RUN_WARMUP
+        confirm "Would you like to analyze existing InnoDB tables?" && RUN_ANALYZE="yes"
+        confirm "Would you like to warm up the buffer pool?" && RUN_WARMUP="yes"
         echo ""
 
         if [ "$RUN_ANALYZE" != "yes" ] && [ "$RUN_WARMUP" != "yes" ]; then
@@ -488,6 +480,8 @@ main() {
     fi
     print_info "✓ Done!"
     echo ""
+
+    [ -z "$FAILED_TABLES" ] || exit 1
 }
 
 # Run main

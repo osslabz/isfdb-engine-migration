@@ -11,7 +11,7 @@
 # - Provides recommendations for optimal settings
 #
 # Usage:
-#   ./analyze_innodb.sh [login-path-name]
+#   ./analyze_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path-name]
 #
 # Examples:
 #   ./analyze_innodb.sh              # Uses 'isfdb_local' login-path
@@ -35,32 +35,20 @@ fi
 # =====================================================
 
 DB_NAME="isfdb"
-LOGIN_PATH="${1:-isfdb_local}"
 
 # =====================================================
 # MAIN SCRIPT
 # =====================================================
 
 main() {
-    # Check prerequisites
-    check_mysql_tools || exit 1
-
-    # Setup authentication
-    print_header "MySQL Authentication Setup"
-    setup_login_path "${LOGIN_PATH}" || exit 1
-
-    # MySQL command
-    MYSQL_CMD="mysql --login-path=${LOGIN_PATH}"
-
-    # Test connection
-    test_mysql_connection "${MYSQL_CMD}" || exit 1
+    parse_connection_args "$@" || exit 1
+    connect_mysql || exit 1
 
     # Discover InnoDB tables
     discover_tables
 
     # Confirm before proceeding
-    read -p "Do you want to analyze these tables? (yes/no): " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
+    if ! confirm "Do you want to analyze these tables?"; then
         print_info "Operation cancelled"
         exit 0
     fi
@@ -76,6 +64,8 @@ main() {
 
     # Display summary
     display_summary
+
+    [ "$ANALYZE_FAILED" -eq 0 ] || exit 1
 }
 
 # =====================================================

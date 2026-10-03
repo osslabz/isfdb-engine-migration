@@ -9,6 +9,9 @@
 # Usage:
 #   source ./mysql_innodb_lib.sh
 #
+# Scripts accept: [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]
+# (see parse_connection_args). ISFDB_ASSUME_YES=1 is the same as --yes.
+#
 # =====================================================
 
 # =====================================================
@@ -56,6 +59,54 @@ print_separator() {
 # MYSQL CONNECTION MANAGEMENT
 # =====================================================
 
+ASSUME_YES=0
+[ "${ISFDB_ASSUME_YES:-}" = "1" ] && ASSUME_YES=1
+LOGIN_PATH="isfdb_local"
+DB_USER=""
+DEFAULTS_EXTRA_FILE=""
+
+# Parse the options shared by all scripts
+# Args: the script's command line
+# Sets: ASSUME_YES, LOGIN_PATH, DB_USER, DEFAULTS_EXTRA_FILE
+parse_connection_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -y|--yes)
+                ASSUME_YES=1
+                ;;
+            --user|--defaults-extra-file)
+                if [ $# -lt 2 ]; then
+                    print_error "Option $1 needs a value"
+                    return 1
+                fi
+                if [ "$1" = "--user" ]; then DB_USER="$2"; else DEFAULTS_EXTRA_FILE="$2"; fi
+                shift
+                ;;
+            -*)
+                print_error "Unknown option: $1"
+                echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]"
+                return 1
+                ;;
+            *)
+                LOGIN_PATH="$1"
+                ;;
+        esac
+        shift
+    done
+}
+
+# Ask a yes/no question; always yes when --yes is set
+# Args: $1 = question
+# Returns: 0 on yes
+confirm() {
+    if [ "$ASSUME_YES" = "1" ]; then
+        return 0
+    fi
+    local answer
+    read -r -p "$1 (yes/no): " answer
+    [ "$answer" = "yes" ]
+}
+
 # Check if mysql_config_editor is installed
 check_mysql_tools() {
     if ! command -v mysql_config_editor &> /dev/null; then
@@ -80,12 +131,16 @@ setup_login_path() {
         echo ""
         echo "Setup: mysql_config_editor set --login-path=${login_path} --user=root --password"
         echo ""
-        read -p "Set it up now? (yes/no): " SETUP_NOW
+        if [ "$ASSUME_YES" = "1" ]; then
+            print_error "Non-interactive mode cannot set up a login-path; create it first or use --user / --defaults-extra-file"
+            return 1
+        fi
 
-        if [ "$SETUP_NOW" = "yes" ]; then
-            read -p "MySQL username [root]: " DB_USER
-            DB_USER=${DB_USER:-root}
-            mysql_config_editor set --login-path="${login_path}" --user="${DB_USER}" --password
+        if confirm "Set it up now?"; then
+            local setup_user
+            read -p "MySQL username [root]: " setup_user
+            setup_user=${setup_user:-root}
+            mysql_config_editor set --login-path="${login_path}" --user="${setup_user}" --password
             if ! mysql_config_editor print --login-path="${login_path}" &> /dev/null; then
                 print_error "Setup failed"
                 return 1
@@ -100,6 +155,39 @@ setup_login_path() {
     mysql_config_editor print --login-path="${login_path}" 2>/dev/null | grep -E "user|host" | sed 's/^/  /'
     echo ""
     return 0
+}
+
+# Build MYSQL_CMD from the parsed options and test the connection
+# --user / --defaults-extra-file replace the login-path; the mysql client
+# still reads MYSQL_PWD, MYSQL_HOST and MYSQL_TCP_PORT from the environment.
+# Sets: MYSQL_CMD, MYSQL_VERSION, CONNECTION_LABEL
+connect_mysql() {
+    print_header "MySQL Authentication Setup"
+
+    if [ -n "$DB_USER" ] || [ -n "$DEFAULTS_EXTRA_FILE" ]; then
+        if ! command -v mysql &> /dev/null; then
+            print_error "mysql client not found!"
+            return 1
+        fi
+        if [ -n "$DEFAULTS_EXTRA_FILE" ] && [ ! -r "$DEFAULTS_EXTRA_FILE" ]; then
+            print_error "Cannot read defaults file: ${DEFAULTS_EXTRA_FILE}"
+            return 1
+        fi
+        # --defaults-extra-file must be the first mysql option
+        MYSQL_CMD="mysql"
+        CONNECTION_LABEL="credentials from options/environment"
+        [ -n "$DEFAULTS_EXTRA_FILE" ] && MYSQL_CMD="${MYSQL_CMD} --defaults-extra-file=${DEFAULTS_EXTRA_FILE}"
+        [ -n "$DB_USER" ] && MYSQL_CMD="${MYSQL_CMD} --user=${DB_USER}"
+        print_info "Using ${CONNECTION_LABEL}"
+        echo ""
+    else
+        check_mysql_tools || return 1
+        setup_login_path "${LOGIN_PATH}" || return 1
+        MYSQL_CMD="mysql --login-path=${LOGIN_PATH}"
+        CONNECTION_LABEL="login-path ${LOGIN_PATH}"
+    fi
+
+    test_mysql_connection "${MYSQL_CMD}"
 }
 
 # Test MySQL connection and get version
