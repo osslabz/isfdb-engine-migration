@@ -44,10 +44,10 @@ All scripts take the same options:
 |--------|--------|
 | `[login-path]` | Login-path to connect with (default `isfdb_local`) |
 | `--yes`, `-y` | Answer every confirmation with yes and never prompt. Same as `ISFDB_ASSUME_YES=1` |
-| `--user NAME` | Connect as `NAME` instead of using a login-path |
+| `--user NAME` | Connect as `NAME` instead of using a login-path (name without spaces) |
 | `--defaults-extra-file FILE` | Read credentials from a MySQL option file instead of using a login-path (path without spaces) |
 
-`--user` and `--defaults-extra-file` replace the login-path, so `mysql_config_editor` is not needed.
+`--user` and `--defaults-extra-file` replace the login-path (giving both is an error), so `mysql_config_editor` is not needed.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
 Without `--yes`, the scripts prompt as usual. With `--yes` a missing login-path is an error instead of a setup prompt.
 The scripts exit non-zero if the connection fails or a table cannot be converted or analyzed.

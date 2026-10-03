@@ -69,6 +69,7 @@ DEFAULTS_EXTRA_FILE=""
 # Args: the script's command line
 # Sets: ASSUME_YES, LOGIN_PATH, DB_USER, DEFAULTS_EXTRA_FILE
 parse_connection_args() {
+    local login_path_given=0
     while [ $# -gt 0 ]; do
         case "$1" in
             -y|--yes)
@@ -87,12 +88,21 @@ parse_connection_args() {
                 echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]"
                 return 1
                 ;;
+            "")
+                ;;
             *)
                 LOGIN_PATH="$1"
+                login_path_given=1
                 ;;
         esac
         shift
     done
+
+    if [ "$login_path_given" = "1" ] && { [ -n "$DB_USER" ] || [ -n "$DEFAULTS_EXTRA_FILE" ]; }; then
+        print_error "A login-path cannot be combined with --user or --defaults-extra-file"
+        echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]"
+        return 1
+    fi
 }
 
 # Ask a yes/no question; always yes when --yes is set
@@ -831,13 +841,13 @@ display_space_difference() {
     local size_before="$1"
     local size_after="$2"
 
-    local space_saved=$(awk -v b="$size_before" -v a="$size_after" 'BEGIN { print b - a }')
+    local space_saved=$(awk -v b="$size_before" -v a="$size_after" 'BEGIN { printf "%.2f", b - a }')
 
     if awk -v d="$space_saved" 'BEGIN { exit !(d > 0) }'; then
         local percent_saved=$(awk -v d="$space_saved" -v b="$size_before" 'BEGIN { printf "%.1f", d * 100 / b }')
         print_info "Space reclaimed: ${GREEN}${space_saved} MB${NC} (${percent_saved}%)"
     elif awk -v d="$space_saved" 'BEGIN { exit !(d < 0) }'; then
-        local space_increased=$(awk -v d="$space_saved" 'BEGIN { print -d }')
+        local space_increased=$(awk -v d="$space_saved" 'BEGIN { printf "%.2f", -d }')
         print_warn "Size increased: ${YELLOW}${space_increased} MB${NC} (InnoDB overhead)"
     else
         print_info "Size unchanged"
