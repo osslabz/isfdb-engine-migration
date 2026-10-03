@@ -8,6 +8,7 @@ MySQL InnoDB migration and analysis tools for the Internet Speculative Fiction D
 |--------|---------|
 | `dynamic_migration.sh` | Converts MyISAM tables to InnoDB |
 | `analyze_innodb.sh` | Analyzes InnoDB tables (updates index statistics) |
+| `optimize_innodb.sh` | Optimizes InnoDB tables (rebuild + analyze) |
 | `mysql_innodb_lib.sh` | Shared function library (sourced by the scripts above) |
 
 ## Prerequisites

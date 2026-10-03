@@ -633,6 +633,24 @@ analyze_table() {
     ${mysql_cmd} -D "${db_name}" -e "ANALYZE TABLE \`${table_name}\`;" 2>&1
 }
 
+# Optimize table (on InnoDB: rebuild + analyze)
+# Fails when the client fails or any result row reports an error or a status other than OK
+# Args: $1 = mysql command, $2 = database name, $3 = table name
+optimize_table() {
+    local mysql_cmd="$1"
+    local db_name="$2"
+    local table_name="$3"
+
+    local output
+    output=$(${mysql_cmd} -D "${db_name}" -e "OPTIMIZE TABLE \`${table_name}\`;" 2>&1) || {
+        echo "$output"
+        return 1
+    }
+    echo "$output"
+    # Result columns: Table, Op, Msg_type, Msg_text
+    awk -F'\t' 'NR > 1 && (tolower($3) == "error" || (tolower($3) == "status" && $4 != "OK")) { bad = 1 } END { exit bad }' <<< "$output"
+}
+
 # Set foreign key checks
 # Args: $1 = mysql command, $2 = database name, $3 = on/off (0 or 1)
 set_foreign_key_checks() {
