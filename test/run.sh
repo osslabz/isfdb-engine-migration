@@ -318,6 +318,82 @@ test_declined_prompt_changes_nothing() {
 }
 
 # =====================================================
+# Tests: options
+# =====================================================
+
+# Databases besides the system ones, by name
+user_databases() {
+    sql -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME" | tr '\n' ' ' | sed 's/ $//'
+}
+
+test_custom_target() {
+    run_migration --source isfdb --target isfdb_copy
+    assert_eq "exit code" 0 "$?"
+    assert_eq "checksums" "$(checksums isfdb)" "$(checksums isfdb_copy)"
+    assert_eq "databases" "isfdb isfdb_copy" "$(user_databases)"
+}
+
+test_missing_source_database() {
+    run_migration --source nope
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Source database nope does not exist or has no tables"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_empty_source_database() {
+    sql -e "CREATE DATABASE empty_source"
+    run_migration --source empty_source
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Source database empty_source does not exist or has no tables"
+    assert_eq "databases" "empty_source isfdb" "$(user_databases)"
+}
+
+test_source_equals_target() {
+    local checksums_before
+    checksums_before=$(checksums isfdb)
+    run_migration --source isfdb --target isfdb
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "--source and --target must differ"
+    assert_eq "isfdb checksums" "$checksums_before" "$(checksums isfdb)"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_invalid_database_name() {
+    run_migration --target 'isfdb-innodb'
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "--target must match [A-Za-z0-9_]+, got 'isfdb-innodb'"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_target_too_long() {
+    run_migration --target "$(printf 'a%.0s' $(seq 1 60))"
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "exceeds 64 characters"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_scratch_name_equals_source() {
+    run_migration --source isfdb_next --target isfdb
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "--source must not be isfdb_next"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_option_without_value() {
+    run_migration --target
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Option --target needs a value"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_unknown_option() {
+    run_migration --database isfdb
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Unknown option: --database"
+    assert_log_contains "[--source DB] [--target DB]"
+}
+
+# =====================================================
 # Runner
 # =====================================================
 

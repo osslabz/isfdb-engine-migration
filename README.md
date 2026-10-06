@@ -39,7 +39,7 @@ mysql_config_editor print --all
 
 ## Options
 
-All scripts take the same options:
+All scripts take these options:
 
 | Option | Effect |
 |--------|--------|
@@ -47,6 +47,10 @@ All scripts take the same options:
 | `--yes`, `-y` | Answer every confirmation with yes and never prompt. Same as `ISFDB_ASSUME_YES=1` |
 | `--user NAME` | Connect as `NAME` instead of using a login-path (name without spaces) |
 | `--defaults-extra-file FILE` | Read credentials from a MySQL option file instead of using a login-path (path without spaces) |
+| `--source DB` | `dynamic_migration.sh` only: database to copy (default `isfdb`) |
+| `--target DB` | `dynamic_migration.sh` only: database the copy replaces (default `isfdb_innodb`) |
+
+Database names must match `[A-Za-z0-9_]+`. `--source` and `--target` must differ, and the copy also uses `<target>_next` and `<target>_old`.
 
 `--user` and `--defaults-extra-file` replace the login-path (giving both is an error), so `mysql_config_editor` is not needed.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
@@ -108,10 +112,6 @@ Or with a credentials file:
 ```bash
 ./dynamic_migration.sh --yes --defaults-extra-file /run/secrets/isfdb.cnf
 ```
-
-## Database Configuration
-
-The scripts target the `isfdb` database by default. This is configured at the top of each script if you need to change it.
 
 ## Buffer Pool Recommendations
 

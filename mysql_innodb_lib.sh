@@ -10,7 +10,8 @@
 #   source ./mysql_innodb_lib.sh
 #
 # Scripts accept: [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]
-# (see parse_connection_args). ISFDB_ASSUME_YES=1 is the same as --yes.
+# plus their own options in OPTION_VARIABLES (see parse_connection_args).
+# ISFDB_ASSUME_YES=1 is the same as --yes.
 #
 # =====================================================
 
@@ -64,10 +65,27 @@ ASSUME_YES=0
 LOGIN_PATH="isfdb_local"
 DB_USER=""
 DEFAULTS_EXTRA_FILE=""
+# Options that take a value, mapped to the variable they set; a script adds its own before parsing
+declare -A OPTION_VARIABLES=(["--user"]=DB_USER ["--defaults-extra-file"]=DEFAULTS_EXTRA_FILE)
+# Usage text for the options a script adds, e.g. "[--database DB]"
+SCRIPT_USAGE_OPTIONS=""
+
+print_usage() {
+    echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE]${SCRIPT_USAGE_OPTIONS:+ ${SCRIPT_USAGE_OPTIONS}} [login-path]"
+}
+
+# Fail unless the name is a plain identifier, so the scripts can put it into SQL
+# Args: $1 = option the name came from, $2 = database name
+validate_database_name() {
+    if [[ ! "$2" =~ ^[A-Za-z0-9_]+$ ]]; then
+        print_error "$1 must match [A-Za-z0-9_]+, got '$2'"
+        return 1
+    fi
+}
 
 # Parse the options shared by all scripts
 # Args: the script's command line
-# Sets: ASSUME_YES, LOGIN_PATH, DB_USER, DEFAULTS_EXTRA_FILE
+# Sets: ASSUME_YES, LOGIN_PATH and the variables in OPTION_VARIABLES
 parse_connection_args() {
     local login_path_given=0
     while [ $# -gt 0 ]; do
@@ -75,18 +93,18 @@ parse_connection_args() {
             -y|--yes)
                 ASSUME_YES=1
                 ;;
-            --user|--defaults-extra-file)
+            -*)
+                if [ -z "${OPTION_VARIABLES[$1]+set}" ]; then
+                    print_error "Unknown option: $1"
+                    print_usage
+                    return 1
+                fi
                 if [ $# -lt 2 ]; then
                     print_error "Option $1 needs a value"
                     return 1
                 fi
-                if [ "$1" = "--user" ]; then DB_USER="$2"; else DEFAULTS_EXTRA_FILE="$2"; fi
+                printf -v "${OPTION_VARIABLES[$1]}" '%s' "$2"
                 shift
-                ;;
-            -*)
-                print_error "Unknown option: $1"
-                echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]"
-                return 1
                 ;;
             "")
                 ;;
@@ -100,7 +118,7 @@ parse_connection_args() {
 
     if [ "$login_path_given" = "1" ] && { [ -n "$DB_USER" ] || [ -n "$DEFAULTS_EXTRA_FILE" ]; }; then
         print_error "A login-path cannot be combined with --user or --defaults-extra-file"
-        echo "Usage: $(basename "$0") [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path]"
+        print_usage
         return 1
     fi
 }

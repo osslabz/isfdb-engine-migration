@@ -12,9 +12,14 @@ source "${SCRIPT_DIR}/mysql_innodb_lib.sh"
 # Configuration
 SOURCE_DB="isfdb"
 TARGET_DB="isfdb_innodb"
+OPTION_VARIABLES["--source"]=SOURCE_DB
+OPTION_VARIABLES["--target"]=TARGET_DB
+SCRIPT_USAGE_OPTIONS="[--source DB] [--target DB]"
 # The copy is built in <target>_next; the replaced target tables pass through <target>_old
 SCRATCH_SUFFIX="_next"
 OLD_TARGET_SUFFIX="_old"
+# MySQL's limit for database names
+MAX_DATABASE_NAME_LENGTH=64
 
 # The copy is rebuilt from the dump, never replicated, so its writes stay out of the binary log
 NO_BINLOG="SET SESSION sql_log_bin = 0;"
@@ -48,6 +53,32 @@ confirm_migration() {
         return 1
     fi
     return 0
+}
+
+# Check the database names before anything connects or changes
+# Args: $1 = source database, $2 = target database
+validate_database_names() {
+    local source_db="$1"
+    local target_db="$2"
+
+    validate_database_name "--source" "${source_db}" || return 1
+    validate_database_name "--target" "${target_db}" || return 1
+    if [ "${source_db}" = "${target_db}" ]; then
+        print_error "--source and --target must differ"
+        return 1
+    fi
+
+    local derived
+    for derived in "${target_db}${SCRATCH_SUFFIX}" "${target_db}${OLD_TARGET_SUFFIX}"; do
+        if [ "${derived}" = "${source_db}" ]; then
+            print_error "--source must not be ${derived}, the copy uses it for scratch"
+            return 1
+        fi
+        if [ ${#derived} -gt "$MAX_DATABASE_NAME_LENGTH" ]; then
+            print_error "--target is too long: ${derived} exceeds ${MAX_DATABASE_NAME_LENGTH} characters"
+            return 1
+        fi
+    done
 }
 
 # Drop and recreate the scratch database, which also clears what a failed run left behind
@@ -269,6 +300,7 @@ show_final_sizes() {
 
 main() {
     parse_connection_args "$@" || exit 1
+    validate_database_names "${SOURCE_DB}" "${TARGET_DB}" || exit 1
     SCRATCH_DB="${TARGET_DB}${SCRATCH_SUFFIX}"
     OLD_TARGET_DB="${TARGET_DB}${OLD_TARGET_SUFFIX}"
     connect_mysql || exit 1
@@ -276,10 +308,12 @@ main() {
     echo ""
     print_header "Discovering Source Tables"
 
-    SOURCE_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${SOURCE_DB}" "") || {
-        print_error "Failed to query database: $SOURCE_TABLES"
+    SOURCE_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${SOURCE_DB}" "")
+    if [ $? -ne 0 ] || [ -z "$SOURCE_TABLES" ]; then
+        print_error "Source database ${SOURCE_DB} does not exist or has no tables"
+        [ -z "$SOURCE_TABLES" ] || echo "$SOURCE_TABLES"
         exit 1
-    }
+    fi
     TOTAL_TABLES=$(echo "$SOURCE_TABLES" | wc -l)
     print_info "Found ${CYAN}${TOTAL_TABLES}${NC} tables in ${CYAN}${SOURCE_DB}${NC}"
     echo ""
