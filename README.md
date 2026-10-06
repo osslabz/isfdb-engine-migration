@@ -74,7 +74,7 @@ All scripts take these options:
 | `--target DB` | `dynamic_migration.sh` only: database the copy replaces (default `isfdb_innodb`) |
 | `--database DB` | `analyze_innodb.sh` and `optimize_innodb.sh` only: database to work on (default `isfdb_innodb`) |
 
-`--user` and `--defaults-extra-file` replace the login-path. Giving both is an error.
+`--user` and `--defaults-extra-file` replace the login-path and can be used together. Combining a login-path with either of them is an error.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
 Without `--yes` the scripts prompt. With `--yes` a missing login-path is an error instead of a setup prompt.
 
@@ -85,7 +85,7 @@ limit. The script checks the names before it connects.
 ## Copy into InnoDB
 
 ```bash
-./dynamic_migration.sh [--yes] [--user NAME | --defaults-extra-file FILE | login-path] [--source DB] [--target DB]
+./dynamic_migration.sh [--yes] [[--user NAME] [--defaults-extra-file FILE] | login-path] [--source DB] [--target DB]
 ```
 
 A run:

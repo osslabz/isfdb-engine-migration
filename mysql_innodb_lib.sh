@@ -326,25 +326,6 @@ display_detailed_sizes() {
     "
 }
 
-# Display engine distribution
-# Args: $1 = mysql command, $2 = database name
-display_engine_distribution() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-
-    ${mysql_cmd} -D "${db_name}" -t -e "
-        SELECT
-            ENGINE,
-            LPAD(COUNT(*), 8, ' ') as TABLES,
-            LPAD(ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), 10, ' ') AS SIZE_MB
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = '${db_name}'
-        AND TABLE_TYPE = 'BASE TABLE'
-        GROUP BY ENGINE
-        ORDER BY TABLES DESC;
-    "
-}
-
 # =====================================================
 # DATE COLUMNS
 # =====================================================
