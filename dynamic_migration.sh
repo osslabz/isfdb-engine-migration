@@ -473,10 +473,12 @@ main() {
     echo ""
     print_header "Discovering Source Tables"
 
-    SOURCE_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${SOURCE_DB}" "")
-    if [ $? -ne 0 ] || [ -z "$SOURCE_TABLES" ]; then
-        print_error "Source database ${SOURCE_DB} does not exist or has no tables"
-        [ -z "$SOURCE_TABLES" ] || echo "$SOURCE_TABLES"
+    SOURCE_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${SOURCE_DB}" "") || {
+        print_error "Listing the tables of ${CYAN}${SOURCE_DB}${NC} failed: ${SOURCE_TABLES}"
+        exit 1
+    }
+    if [ -z "$SOURCE_TABLES" ]; then
+        print_error "Source database ${CYAN}${SOURCE_DB}${NC} has no tables"
         exit 1
     fi
     TOTAL_TABLES=$(echo "$SOURCE_TABLES" | wc -l)

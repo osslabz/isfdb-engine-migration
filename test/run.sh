@@ -333,7 +333,8 @@ test_custom_target() {
 test_missing_source_database() {
     run_migration --source nope
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Source database nope does not exist or has no tables"
+    assert_log_contains "[ERROR] Listing the tables of nope failed: ERROR 1049 (42000): Unknown database 'nope'"
+    assert_log_lacks "has no tables"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
@@ -341,7 +342,8 @@ test_empty_source_database() {
     sql -e "CREATE DATABASE empty_source"
     run_migration --source empty_source
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Source database empty_source does not exist or has no tables"
+    assert_log_contains "[ERROR] Source database empty_source has no tables"
+    assert_log_lacks "Listing the tables"
     assert_eq "databases" "empty_source isfdb" "$(user_databases)"
 }
 
