@@ -56,9 +56,10 @@ load_fixture_as() {
 }
 
 # Drop every database and user the tests create, then load the fixture into isfdb
+# Databases go in name order: a_refs must go before isfdb_innodb_old, which its foreign key blocks
 reset_server() {
     local db
-    for db in $(sql -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')"); do
+    for db in $(sql -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') ORDER BY SCHEMA_NAME"); do
         sql -e "DROP DATABASE \`${db}\`"
     done
     sql -e "DROP USER IF EXISTS copier"
@@ -282,6 +283,21 @@ test_failed_rename_leaves_no_empty_old_database() {
     assert_no_database isfdb_innodb_old
     assert_database_exists isfdb_innodb_next
     assert_eq "isfdb_innodb tables" "pubs" "$(engines isfdb_innodb | cut -f1)"
+}
+
+test_failed_drop_after_rename_reports_the_copy_in_place() {
+    run_migration
+    assert_eq "first exit code" 0 "$?"
+    # A foreign key from another database follows the renamed authors table and blocks dropping isfdb_innodb_old
+    sql -e "CREATE DATABASE a_refs;
+        CREATE TABLE a_refs.refs (author_id int NOT NULL, FOREIGN KEY (author_id) REFERENCES isfdb_innodb.authors (author_id)) ENGINE = InnoDB"
+
+    run_migration
+    assert_eq "second exit code" 1 "$?"
+    assert_log_contains "[ERROR] The copy is in isfdb_innodb, but dropping isfdb_innodb_old and isfdb_innodb_next failed: ERROR 3730 (HY000) at line 3: Cannot drop table 'authors' referenced by a foreign key constraint 'refs_ibfk_1' on table 'refs'."
+    assert_log_lacks "Failed to move the copy"
+    assert_eq "isfdb_innodb checksums" "$(checksums isfdb)" "$(checksums isfdb_innodb)"
+    assert_database_exists isfdb_innodb_old
 }
 
 test_failed_first_rename_leaves_no_empty_target() {

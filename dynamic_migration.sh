@@ -363,9 +363,9 @@ verify_copy() {
     return $failed
 }
 
-# Move the scratch tables into the target with one atomic RENAME TABLE
-# The tables the target holds now move to the old-target database, which is dropped afterwards,
-# so the target ends up with exactly the scratch tables.
+# Move the scratch tables into the target with one atomic RENAME TABLE, then drop the helper databases
+# The target's own tables pass through the old-target database, so the target ends up with exactly the scratch tables.
+# The drops are a second call; one call would not show whether the RENAME had succeeded when it failed.
 # Args: $1 = mysql command, $2 = scratch database, $3 = target database, $4 = old-target database
 swap_into_target() {
     local mysql_cmd="$1"
@@ -377,19 +377,19 @@ swap_into_target() {
     target_existed=$(${mysql_cmd} -s -N -e "
         SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${target_db}';
     " 2>&1) || {
-        echo "$target_existed"
+        print_error "Failed to move the copy into ${CYAN}${target_db}${NC}: ${target_existed}"
         return 1
     }
     local current_tables=""
     if [ "$target_existed" = "1" ]; then
         current_tables=$(get_tables_by_engine "${mysql_cmd}" "${target_db}" "") || {
-            echo "$current_tables"
+            print_error "Failed to move the copy into ${CYAN}${target_db}${NC}: ${current_tables}"
             return 1
         }
     fi
     local scratch_tables
     scratch_tables=$(get_tables_by_engine "${mysql_cmd}" "${scratch_db}" "") || {
-        echo "$scratch_tables"
+        print_error "Failed to move the copy into ${CYAN}${target_db}${NC}: ${scratch_tables}"
         return 1
     }
 
@@ -402,25 +402,32 @@ swap_into_target() {
         renames="${renames}, \`${scratch_db}\`.\`${table}\` TO \`${target_db}\`.\`${table}\`"
     done <<< "$scratch_tables"
 
-    if ! ${mysql_cmd} -e "
+    local output
+    if ! output=$(${mysql_cmd} -e "
         ${NO_BINLOG}
         DROP DATABASE IF EXISTS \`${old_target_db}\`;
         CREATE DATABASE \`${old_target_db}\`;
         CREATE DATABASE IF NOT EXISTS \`${target_db}\`;
         RENAME TABLE ${renames#, };
-        DROP DATABASE \`${old_target_db}\`;
-        DROP DATABASE \`${scratch_db}\`;
-    " 2>&1; then
-        # Tables only land in the old-target database when the RENAME succeeded
-        if [ -z "$(get_tables_by_engine "${mysql_cmd}" "${old_target_db}" "")" ]; then
-            ${mysql_cmd} -e "${NO_BINLOG} DROP DATABASE IF EXISTS \`${old_target_db}\`;" 2>&1
-        fi
-        # A target this call created and the failed RENAME left empty is not a copy
-        if [ "$target_existed" = "0" ] && [ -z "$(get_tables_by_engine "${mysql_cmd}" "${target_db}" "")" ]; then
-            ${mysql_cmd} -e "${NO_BINLOG} DROP DATABASE IF EXISTS \`${target_db}\`;" 2>&1
-        fi
+    " 2>&1); then
+        print_error "Failed to move the copy into ${CYAN}${target_db}${NC}: ${output}"
+        # The failed RENAME moved nothing, so the old-target database is empty
+        # and a target this call created is empty too, which would pass for a copy
+        local cleanup="DROP DATABASE IF EXISTS \`${old_target_db}\`;"
+        [ "$target_existed" = "0" ] && cleanup="${cleanup} DROP DATABASE IF EXISTS \`${target_db}\`;"
+        output=$(${mysql_cmd} -e "${NO_BINLOG} ${cleanup}" 2>&1) ||
+            print_error "Cleaning up after the failed move failed: ${output}"
         return 1
     fi
+
+    output=$(${mysql_cmd} -e "
+        ${NO_BINLOG}
+        DROP DATABASE \`${old_target_db}\`;
+        DROP DATABASE \`${scratch_db}\`;
+    " 2>&1) || {
+        print_error "The copy is in ${CYAN}${target_db}${NC}, but dropping ${CYAN}${old_target_db}${NC} and ${CYAN}${scratch_db}${NC} failed: ${output}"
+        return 1
+    }
 }
 
 # Show final table sizes and space difference
@@ -521,10 +528,7 @@ main() {
 
     echo ""
     print_header "Replacing ${TARGET_DB}"
-    swap_into_target "${MYSQL_CMD}" "${SCRATCH_DB}" "${TARGET_DB}" "${OLD_TARGET_DB}" || {
-        print_error "Failed to move the copy into ${TARGET_DB}"
-        exit 1
-    }
+    swap_into_target "${MYSQL_CMD}" "${SCRATCH_DB}" "${TARGET_DB}" "${OLD_TARGET_DB}" || exit 1
     print_info "✓ ${TARGET_DB} holds the new copy"
     print_info "Total time: ${CYAN}$(format_duration $(($(date +%s) - START_TIME)))${NC}"
 
