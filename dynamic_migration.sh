@@ -441,29 +441,9 @@ show_final_sizes() {
     print_header "Final Table Sizes"
     echo ""
     print_step "Individual table sizes:"
+    display_detailed_sizes "${mysql_cmd}" "${db_name}" "$tables"
 
-    # Build table name list for query
-    local table_list=$(echo "$tables" | tr '\n' ',' | sed 's/,$//' | sed "s/[^,]*/'&'/g")
-
-    ${mysql_cmd} -D "${db_name}" -t -e "
-        SELECT
-            TABLE_NAME,
-            LPAD(FORMAT(TABLE_ROWS, 0), 15, ' ') AS \`ROWS\`,
-            LPAD(ROUND((DATA_LENGTH) / 1024 / 1024, 2), 10, ' ') AS DATA_MB,
-            LPAD(ROUND((INDEX_LENGTH) / 1024 / 1024, 2), 10, ' ') AS INDEX_MB,
-            LPAD(ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), 10, ' ') AS TOTAL_MB
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = '${db_name}'
-        AND TABLE_NAME IN (${table_list})
-        ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC;
-    "
-
-    local final_size=$(${mysql_cmd} -D "${db_name}" -s -N -e "
-        SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2)
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = '${db_name}'
-        AND TABLE_NAME IN (${table_list});
-    ")
+    local final_size=$(get_total_size "${mysql_cmd}" "${db_name}" "")
 
     echo ""
     print_info "Total size of copied tables: ${CYAN}${final_size} MB${NC}"
