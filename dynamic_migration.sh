@@ -28,7 +28,6 @@ NO_BINLOG="SET SESSION sql_log_bin = 0;"
 # Main Copy Functions
 # =====================================================
 
-# Display copy confirmation and get user approval
 # Args: $1 = total tables, $2 = total size (MB), $3 = estimated minutes
 confirm_migration() {
     local total_tables="$1"
@@ -155,7 +154,6 @@ copy_tables() {
     fi
 }
 
-# Analyze all copied tables (updates index statistics)
 # NO_WRITE_TO_BINLOG keeps ANALYZE out of the binary log like the rest of the copy.
 # Args: $1 = mysql command, $2 = database name, $3 = table list (newline-separated)
 analyze_copied_tables() {
