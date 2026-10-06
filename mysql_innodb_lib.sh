@@ -265,6 +265,12 @@ get_tables_by_engine() {
     " 2>&1
 }
 
+# Count the lines of a text; an empty text has none
+# Args: $1 = text
+count_lines() {
+    grep -c . <<< "$1"
+}
+
 # Display table details with formatted output
 # Args: $1 = mysql command, $2 = database name, $3 = engine (InnoDB/MyISAM), empty for all engines
 display_table_details() {

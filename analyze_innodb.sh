@@ -86,7 +86,7 @@ discover_tables() {
         exit 0
     fi
 
-    TOTAL_TABLES=$(echo "$INNODB_TABLES" | wc -l)
+    TOTAL_TABLES=$(count_lines "$INNODB_TABLES")
     print_info "Found ${CYAN}${TOTAL_TABLES}${NC} InnoDB tables"
     echo ""
 

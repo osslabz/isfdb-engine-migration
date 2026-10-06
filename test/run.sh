@@ -490,13 +490,27 @@ test_optimize_rejects_invalid_database() {
 # Tests: verification
 # =====================================================
 
-# Call verify_copy from the sourced script; output goes to the test's log
+# Call a function of the sourced dynamic_migration.sh; output goes to the test's log
+# Args: $1 = function, rest = its arguments after the mysql command
+# Returns: the function's exit code
+call_function() {
+    local function_name="$1"
+    shift
+    docker exec -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" bash -c \
+        'source /isfdb-engine-migration/dynamic_migration.sh && "$@"' \
+        _ "$function_name" "mysql --user=root" "$@" >> "$(log_file)" 2>&1
+}
+
+# Args: $1 = database name
+base_tables() {
+    sql -e "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' AND TABLE_TYPE = 'BASE TABLE'"
+}
+
+# Call verify_copy on the base tables of the source
 # Args: $1 = source database, $2 = copy database
 # Returns: verify_copy's exit code
 run_verify() {
-    docker exec -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" bash -c \
-        'source /isfdb-engine-migration/dynamic_migration.sh && verify_copy "mysql --user=root" "$1" "$2"' \
-        _ "$1" "$2" >> "$(log_file)" 2>&1
+    call_function verify_copy "$1" "$2" "$(base_tables "$1")"
 }
 
 test_rewritten_source_keeps_old_target() {
@@ -529,6 +543,13 @@ test_verify_reports_missing_table() {
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
     assert_log_contains "only in isfdb: authors"
+}
+
+test_verify_counts_no_tables() {
+    sql -e "CREATE DATABASE empty_source; CREATE DATABASE empty_copy"
+    call_function verify_table_names empty_source empty_copy
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "[INFO] ✓ Same 0 tables"
 }
 
 test_verify_reports_extra_table() {

@@ -123,7 +123,7 @@ copy_tables() {
     local scratch_db="$3"
     local tables="$4"
 
-    local total=$(echo "$tables" | wc -l)
+    local total=$(count_lines "$tables")
     local current=0
     local failed=""
     local output
@@ -167,7 +167,7 @@ analyze_copied_tables() {
     print_info "Running ANALYZE TABLE on all copied tables..."
     echo ""
 
-    local total_tables=$(echo "$tables" | wc -l)
+    local total_tables=$(count_lines "$tables")
     local analyze_count=0
     local analyze_failed=0
 
@@ -226,7 +226,7 @@ verify_table_names() {
         comm -13 <(echo "$source_tables") <(echo "$copy_tables") | sed "s/^/  only in ${copy_db}: /"
         return 1
     fi
-    print_info "✓ Same $(echo "$source_tables" | wc -l) tables"
+    print_info "✓ Same $(count_lines "$source_tables") tables"
 }
 
 # Args: $1 = mysql command, $2 = copy database
@@ -481,7 +481,7 @@ main() {
         print_error "Source database ${CYAN}${SOURCE_DB}${NC} has no tables"
         exit 1
     fi
-    TOTAL_TABLES=$(echo "$SOURCE_TABLES" | wc -l)
+    TOTAL_TABLES=$(count_lines "$SOURCE_TABLES")
     print_info "Found ${CYAN}${TOTAL_TABLES}${NC} tables in ${CYAN}${SOURCE_DB}${NC}"
     echo ""
 
