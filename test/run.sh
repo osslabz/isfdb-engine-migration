@@ -180,6 +180,23 @@ test_copy_matches_source() {
     assert_no_database isfdb_innodb_old
 }
 
+test_copy_prints_one_line_per_analyzed_table() {
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "[INFO] ✓ Analyzed pubs"
+    assert_log_contains "[INFO] ✓ All 5 table(s) analyzed successfully"
+    assert_log_lacks "Msg_text"
+}
+
+test_analyze_reports_failed_table() {
+    sql -e "CREATE DATABASE bad_copy"
+    call_function analyze_copied_tables bad_copy nope
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "[WARN] ⚠ Failed to analyze nope"
+    assert_log_contains "bad_copy.nope	analyze	Error	Table 'bad_copy.nope' doesn't exist"
+    assert_log_contains "[WARN] ⚠ 1 table(s) failed to analyze, 0 succeeded"
+}
+
 test_copy_keeps_partial_dates() {
     run_migration
     assert_eq "exit code" 0 "$?"

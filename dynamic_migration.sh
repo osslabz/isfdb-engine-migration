@@ -170,15 +170,17 @@ analyze_copied_tables() {
     local total_tables=$(count_lines "$tables")
     local analyze_count=0
     local analyze_failed=0
+    local output
 
     while IFS= read -r table; do
         analyze_count=$((analyze_count + 1))
         echo -e "${CYAN}[${analyze_count}/${total_tables}]${NC} Analyzing ${CYAN}${table}${NC}..."
 
-        if run_table_maintenance "${mysql_cmd}" "${db_name}" "ANALYZE NO_WRITE_TO_BINLOG" "${table}"; then
+        if output=$(run_table_maintenance "${mysql_cmd}" "${db_name}" "ANALYZE NO_WRITE_TO_BINLOG" "${table}"); then
             print_info "✓ Analyzed ${CYAN}${table}${NC}"
         else
             print_warn "⚠ Failed to analyze ${CYAN}${table}${NC}"
+            echo "$output" | sed 's/^/    /'
             analyze_failed=$((analyze_failed + 1))
         fi
     done <<< "$tables"
