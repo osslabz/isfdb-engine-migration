@@ -1,12 +1,12 @@
-# isfdb-scripts
+# isfdb-engine-migration
 
-MySQL InnoDB migration and analysis tools for the Internet Speculative Fiction Database (ISFDB).
+Copies the Internet Speculative Fiction Database (ISFDB) into InnoDB tables, plus MySQL InnoDB maintenance tools.
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `dynamic_migration.sh` | Converts MyISAM tables to InnoDB |
+| `dynamic_migration.sh` | Copies the `isfdb` database into `isfdb_innodb`, every table InnoDB |
 | `analyze_innodb.sh` | Analyzes InnoDB tables (updates index statistics) |
 | `optimize_innodb.sh` | Optimizes InnoDB tables (rebuild + analyze) |
 | `mysql_innodb_lib.sh` | Shared function library (sourced by the scripts above) |
@@ -51,23 +51,26 @@ All scripts take the same options:
 `--user` and `--defaults-extra-file` replace the login-path (giving both is an error), so `mysql_config_editor` is not needed.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
 Without `--yes`, the scripts prompt as usual. With `--yes` a missing login-path is an error instead of a setup prompt.
-The scripts exit non-zero if the connection fails or a table cannot be converted or analyzed.
+The scripts exit non-zero if the connection fails or a table cannot be copied or analyzed.
 
 ## Usage
 
-### Migration (MyISAM → InnoDB)
+### Copy into InnoDB
 
 ```bash
 ./dynamic_migration.sh [login-path]
 ```
 
-The migration script:
-- Discovers all MyISAM tables in the `isfdb` database
-- Fixes invalid dates (required for InnoDB strict mode)
-- Keeps FULLTEXT indexes (`ALTER TABLE ... ENGINE=InnoDB` converts them with the table)
-- Converts tables to InnoDB
-- Analyzes converted tables (updates index statistics)
-- Provides buffer pool configuration recommendations
+The script copies the database `isfdb` into `isfdb_innodb`:
+- Builds the copy in `isfdb_innodb_next`: per table `CREATE TABLE ... LIKE`, `ALTER TABLE ... ENGINE = InnoDB` on the empty table, then `INSERT ... SELECT`
+- Copies every value unchanged, zero and partial dates (`0000-00-00`, `1990-05-00`) included
+- Keeps FULLTEXT indexes
+- Analyzes the copied tables (updates index statistics)
+- Replaces `isfdb_innodb` with one atomic `RENAME TABLE`. A failed run leaves the previous `isfdb_innodb` as it was
+- Never changes `isfdb`
+
+The copy keeps its writes out of the binary log (`SET SESSION sql_log_bin = 0`). The MySQL user needs
+`SYSTEM_VARIABLES_ADMIN` or `SESSION_VARIABLES_ADMIN` for that.
 
 ### Analysis
 
@@ -97,7 +100,7 @@ The analysis script:
 
 ```bash
 docker compose exec -T isfdb sh -c \
-    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" /isfdb-scripts/dynamic_migration.sh --yes --user root'
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" /isfdb-engine-migration/dynamic_migration.sh --yes --user root'
 ```
 
 Or with a credentials file:
@@ -125,3 +128,12 @@ Apply recommendations in your MySQL configuration:
 [mysqld]
 innodb_buffer_pool_size = 8G
 ```
+
+## Tests
+
+```bash
+test/run.sh
+```
+
+Runs the scripts against a throwaway `mysql:9.7` container with a small ISFDB fixture (`test/fixture.sql`).
+Needs Docker. The container publishes no port.

@@ -1,0 +1,347 @@
+#!/bin/bash
+# Runs the scripts against a throwaway MySQL 9.7 container and checks the results.
+# Usage: test/run.sh   (needs docker; publishes no host port)
+# Every function named test_* is a test. Each starts from a server that holds only the fixture in isfdb.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FIXTURE="${REPO_DIR}/test/fixture.sql"
+FIXTURE_TABLES="authors mw_user_groups pubs submissions titles"
+CONTAINER="isfdb-engine-migration-test-$$"
+ROOT_PASSWORD="test_root_pwd"
+LOG_DIR="$(mktemp -d)"
+PASSED=0
+FAILED=0
+CURRENT_TEST=""
+
+cleanup() {
+    docker rm -f "$CONTAINER" > /dev/null 2>&1
+    rm -rf "$LOG_DIR"
+}
+trap cleanup EXIT
+
+# =====================================================
+# Server
+# =====================================================
+
+start_server() {
+    docker run -d --name "$CONTAINER" \
+        -e MYSQL_ROOT_PASSWORD="$ROOT_PASSWORD" \
+        --tmpfs /var/lib/mysql \
+        -v "${REPO_DIR}:/isfdb-engine-migration:ro" \
+        mysql:9.7 > /dev/null || exit 1
+    local attempt
+    for attempt in $(seq 1 90); do
+        # The entrypoint's init server listens on port 0; only the final server reports 3306.
+        if docker logs "$CONTAINER" 2>&1 | grep 'ready for connections.*port: 3306' > /dev/null; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo "MySQL did not start" >&2
+    exit 1
+}
+
+# Run the mysql client as root in the container
+# Args: mysql client options
+sql() {
+    docker exec -i -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" \
+        mysql --user=root --batch --skip-column-names "$@"
+}
+
+# Load the fixture into a new database
+# Args: $1 = database name
+load_fixture_as() {
+    sed "s/^CREATE DATABASE isfdb;$/CREATE DATABASE \`$1\`;/; s/^USE isfdb;$/USE \`$1\`;/" "$FIXTURE" | sql
+}
+
+# Drop every database and user the tests create, then load the fixture into isfdb
+reset_server() {
+    local db
+    for db in $(sql -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')"); do
+        sql -e "DROP DATABASE \`${db}\`"
+    done
+    sql -e "DROP USER IF EXISTS copier"
+    load_fixture_as isfdb
+}
+
+# Run a repo script in the container; its output goes to the test's log
+# Args: $1 = MySQL user, $2 = password, $3 = script file name, rest = script options
+# Returns: the script's exit code
+run_script_as() {
+    local user="$1"
+    local password="$2"
+    local script="$3"
+    shift 3
+    docker exec -e MYSQL_PWD="$password" "$CONTAINER" \
+        "/isfdb-engine-migration/${script}" --user "$user" "$@" >> "$(log_file)" 2>&1
+}
+
+# Args: options for dynamic_migration.sh
+run_migration() {
+    run_script_as root "$ROOT_PASSWORD" dynamic_migration.sh --yes "$@"
+}
+
+# =====================================================
+# State
+# =====================================================
+
+# Print "table<TAB>checksum" for every table of a database, by table name
+# Args: $1 = database name
+checksums() {
+    local tables
+    tables=$(sql -e "SELECT GROUP_CONCAT(CONCAT('\`', TABLE_NAME, '\`') ORDER BY TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1'")
+    if [ "$tables" = "NULL" ]; then
+        return 0
+    fi
+    sql -D "$1" -e "CHECKSUM TABLE ${tables}" | sed "s/^$1\.//"
+}
+
+# Print "table<TAB>engine" for every table of a database, by table name
+# Args: $1 = database name
+engines() {
+    sql -e "SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = '$1' ORDER BY TABLE_NAME"
+}
+
+# Args: $1 = database name
+database_exists() {
+    [ -n "$(sql -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '$1'")" ]
+}
+
+# =====================================================
+# Assertions
+# =====================================================
+
+log_file() { echo "${LOG_DIR}/${CURRENT_TEST}.log"; }
+failures_file() { echo "${LOG_DIR}/${CURRENT_TEST}.failures"; }
+
+# The test's log without color codes
+log_text() { sed 's/\x1b\[[0-9;]*m//g' "$(log_file)"; }
+
+fail() { echo "$1" >> "$(failures_file)"; }
+
+# Args: $1 = description, $2 = expected, $3 = actual
+assert_eq() {
+    if [ "$2" != "$3" ]; then
+        fail "$1: expected [$2], got [$3]"
+    fi
+}
+
+assert_database_exists() {
+    if ! database_exists "$1"; then
+        fail "database $1 is missing"
+    fi
+}
+
+assert_no_database() {
+    if database_exists "$1"; then
+        fail "database $1 exists"
+    fi
+}
+
+assert_log_contains() {
+    if ! grep -F -- "$1" <(log_text) > /dev/null; then
+        fail "output lacks [$1]"
+    fi
+}
+
+assert_log_lacks() {
+    if grep -F -- "$1" <(log_text) > /dev/null; then
+        fail "output contains [$1]"
+    fi
+}
+
+# =====================================================
+# Tests: copy
+# =====================================================
+
+test_copy_leaves_source_unchanged() {
+    local engines_before checksums_before
+    engines_before=$(engines isfdb)
+    checksums_before=$(checksums isfdb)
+
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_eq "isfdb engines" "$engines_before" "$(engines isfdb)"
+    assert_eq "isfdb checksums" "$checksums_before" "$(checksums isfdb)"
+}
+
+test_copy_matches_source() {
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_eq "tables" "$FIXTURE_TABLES" "$(engines isfdb_innodb | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+    assert_eq "engines not InnoDB" "" "$(engines isfdb_innodb | awk -F'\t' '$2 != "InnoDB"')"
+    assert_eq "checksums" "$(checksums isfdb)" "$(checksums isfdb_innodb)"
+    assert_no_database isfdb_innodb_next
+    assert_no_database isfdb_innodb_old
+}
+
+test_copy_keeps_partial_dates() {
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_eq "pubs.pub_year" \
+        "$(printf '1\t0000-00-00\n2\t2016-11-00\n3\t1990-00-00\n4\t1990-05-00\n5\t1984-07-01\n6\tNULL')" \
+        "$(sql -e "SELECT pub_id, CAST(pub_year AS CHAR) FROM isfdb_innodb.pubs ORDER BY pub_id")"
+    assert_eq "titles.title_copyright" \
+        "$(printf '1\t1965-00-00\n2\t1969-10-15\n3\t2016-00-00\n4\t0000-00-00\n5\tNULL')" \
+        "$(sql -e "SELECT title_id, CAST(title_copyright AS CHAR) FROM isfdb_innodb.titles ORDER BY title_id")"
+    assert_eq "authors dates" \
+        "$(printf '1\t1920-10-08\t1986-02-11\n2\t1901-00-00\t0000-00-00\n3\tNULL\tNULL')" \
+        "$(sql -e "SELECT author_id, CAST(author_birthdate AS CHAR), CAST(author_deathdate AS CHAR) FROM isfdb_innodb.authors ORDER BY author_id")"
+    assert_eq "submissions.sub_time" \
+        "$(printf '1\t0000-00-00 00:00:00\n2\t2025-11-15 10:20:30')" \
+        "$(sql -e "SELECT sub_id, CAST(sub_time AS CHAR) FROM isfdb_innodb.submissions ORDER BY sub_id")"
+}
+
+test_copy_keeps_fulltext_index() {
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_eq "FULLTEXT index" "full_text" \
+        "$(sql -e "SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'isfdb_innodb' AND TABLE_NAME = 'titles' AND INDEX_TYPE = 'FULLTEXT'")"
+    assert_eq "FULLTEXT match" "2" \
+        "$(sql -e "SELECT title_id FROM isfdb_innodb.titles WHERE MATCH(title_title) AGAINST('Messiah')")"
+}
+
+test_second_run_replaces_target() {
+    run_migration
+    assert_eq "first exit code" 0 "$?"
+    run_migration
+    assert_eq "second exit code" 0 "$?"
+    assert_eq "checksums" "$(checksums isfdb)" "$(checksums isfdb_innodb)"
+    assert_no_database isfdb_innodb_next
+    assert_no_database isfdb_innodb_old
+}
+
+test_rerun_drops_stale_scratch() {
+    sql -e "CREATE DATABASE isfdb_innodb_next; CREATE TABLE isfdb_innodb_next.leftover (id int) ENGINE = InnoDB"
+
+    run_migration
+    assert_eq "exit code" 0 "$?"
+    assert_eq "checksums" "$(checksums isfdb)" "$(checksums isfdb_innodb)"
+    assert_no_database isfdb_innodb_next
+}
+
+test_swap_moves_out_tables_the_copy_lacks() {
+    run_migration
+    assert_eq "first exit code" 0 "$?"
+    sql -e "CREATE TABLE isfdb_innodb.dropped_upstream (id int) ENGINE = InnoDB"
+
+    run_migration
+    assert_eq "second exit code" 0 "$?"
+    assert_eq "tables" "$FIXTURE_TABLES" "$(engines isfdb_innodb | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+    assert_no_database isfdb_innodb_old
+}
+
+test_failed_table_keeps_old_target() {
+    run_migration
+    assert_eq "first exit code" 0 "$?"
+    local target_before
+    target_before=$(checksums isfdb_innodb)
+    # InnoDB allows at most 1017 columns, MyISAM more
+    sql -e "CREATE TABLE isfdb.wide ($(seq -f 'c%g int' -s ', ' 1 1020)) ENGINE = MyISAM"
+
+    run_migration
+    assert_eq "second exit code" 1 "$?"
+    assert_log_contains "Failed to copy wide"
+    assert_log_contains "Too many columns"
+    assert_eq "isfdb_innodb checksums" "$target_before" "$(checksums isfdb_innodb)"
+    assert_no_database isfdb_innodb_old
+    assert_eq "other tables copied after the failure" \
+        "$(checksums isfdb | grep -v '^wide')" "$(checksums isfdb_innodb_next | grep -v '^wide')"
+}
+
+test_failed_rename_leaves_no_empty_old_database() {
+    # A view named like a copied table makes the RENAME fail
+    sql -e "CREATE DATABASE isfdb_innodb; CREATE VIEW isfdb_innodb.pubs AS SELECT 1 AS x"
+
+    run_migration
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "already exists"
+    assert_log_contains "Failed to move the copy into isfdb_innodb"
+    assert_no_database isfdb_innodb_old
+    assert_database_exists isfdb_innodb_next
+    assert_eq "isfdb_innodb tables" "pubs" "$(engines isfdb_innodb | cut -f1)"
+}
+
+test_failed_first_rename_leaves_no_empty_target() {
+    # The user may create isfdb_innodb but not move tables into it, so the RENAME fails
+    sql -e "CREATE USER copier IDENTIFIED BY 'copier_pwd';
+        GRANT SELECT ON isfdb.* TO copier;
+        GRANT ALL ON isfdb_innodb_next.* TO copier;
+        GRANT ALL ON isfdb_innodb_old.* TO copier;
+        GRANT CREATE, DROP ON isfdb_innodb.* TO copier;
+        GRANT SESSION_VARIABLES_ADMIN ON *.* TO copier"
+
+    run_script_as copier copier_pwd dynamic_migration.sh --yes
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Failed to move the copy into isfdb_innodb"
+    assert_no_database isfdb_innodb
+    assert_no_database isfdb_innodb_old
+    assert_database_exists isfdb_innodb_next
+}
+
+test_analyze_fails_without_database() {
+    sql -e "DROP DATABASE isfdb"
+
+    run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb'"
+    assert_log_lacks "No InnoDB tables found"
+}
+
+test_optimize_fails_without_database() {
+    sql -e "DROP DATABASE isfdb"
+
+    run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb'"
+    assert_log_lacks "No InnoDB tables found"
+}
+
+test_missing_privilege_changes_nothing() {
+    sql -e "CREATE USER copier IDENTIFIED BY 'copier_pwd'; GRANT ALL ON *.* TO copier; REVOKE SYSTEM_VARIABLES_ADMIN, SESSION_VARIABLES_ADMIN, SUPER ON *.* FROM copier"
+
+    run_script_as copier copier_pwd dynamic_migration.sh --yes
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "SESSION_VARIABLES_ADMIN"
+    assert_no_database isfdb_innodb_next
+    assert_no_database isfdb_innodb
+}
+
+test_declined_prompt_changes_nothing() {
+    printf 'no\n' | docker exec -i -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" \
+        /isfdb-engine-migration/dynamic_migration.sh --user root >> "$(log_file)" 2>&1
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "Copy cancelled"
+    assert_no_database isfdb_innodb_next
+    assert_no_database isfdb_innodb
+}
+
+# =====================================================
+# Runner
+# =====================================================
+
+run_test() {
+    CURRENT_TEST="$1"
+    : > "$(log_file)"
+    reset_server
+    "$CURRENT_TEST"
+    if [ -s "$(failures_file)" ]; then
+        echo "not ok - ${CURRENT_TEST}"
+        sed 's/^/    /' "$(failures_file)"
+        echo "    --- output"
+        sed 's/^/    /' "$(log_file)"
+        FAILED=$((FAILED + 1))
+    else
+        echo "ok - ${CURRENT_TEST}"
+        PASSED=$((PASSED + 1))
+    fi
+}
+
+start_server
+for test_name in $(declare -F | awk '{ print $3 }' | grep '^test_'); do
+    run_test "$test_name"
+done
+echo ""
+echo "${PASSED} passed, ${FAILED} failed"
+[ "$FAILED" -eq 0 ]

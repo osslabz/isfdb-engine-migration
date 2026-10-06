@@ -227,8 +227,16 @@ test_mysql_connection() {
 # TABLE DISCOVERY FUNCTIONS
 # =====================================================
 
+# Condition that limits an information_schema.TABLES query to one engine
+# Args: $1 = engine, empty for all engines
+engine_condition() {
+    if [ -n "$1" ]; then
+        echo "AND ENGINE = '$1'"
+    fi
+}
+
 # Get tables by engine type
-# Args: $1 = mysql command, $2 = database name, $3 = engine (InnoDB/MyISAM)
+# Args: $1 = mysql command, $2 = database name, $3 = engine (InnoDB/MyISAM), empty for all engines
 # Returns: table list (one per line)
 get_tables_by_engine() {
     local mysql_cmd="$1"
@@ -239,14 +247,14 @@ get_tables_by_engine() {
         SELECT TABLE_NAME
         FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = '${db_name}'
-        AND ENGINE = '${engine}'
+        $(engine_condition "${engine}")
         AND TABLE_TYPE = 'BASE TABLE'
         ORDER BY (DATA_LENGTH + INDEX_LENGTH) ASC;
     " 2>&1
 }
 
 # Display table details with formatted output
-# Args: $1 = mysql command, $2 = database name, $3 = engine
+# Args: $1 = mysql command, $2 = database name, $3 = engine (InnoDB/MyISAM), empty for all engines
 display_table_details() {
     local mysql_cmd="$1"
     local db_name="$2"
@@ -260,14 +268,14 @@ display_table_details() {
             LPAD(ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2), 10, ' ') AS SIZE_MB
         FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = '${db_name}'
-        AND ENGINE = '${engine}'
+        $(engine_condition "${engine}")
         ORDER BY SIZE_MB DESC
         LIMIT 20;
     "
 }
 
 # Get total size of tables
-# Args: $1 = mysql command, $2 = database name, $3 = engine
+# Args: $1 = mysql command, $2 = database name, $3 = engine (InnoDB/MyISAM), empty for all engines
 get_total_size() {
     local mysql_cmd="$1"
     local db_name="$2"
@@ -277,7 +285,7 @@ get_total_size() {
         SELECT ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2)
         FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = '${db_name}'
-        AND ENGINE = '${engine}'
+        $(engine_condition "${engine}")
         AND TABLE_TYPE = 'BASE TABLE';
     "
 }

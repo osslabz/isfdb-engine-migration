@@ -1,110 +1,139 @@
 #!/bin/bash
 # =====================================================
-# ISFDB Dynamic MyISAM to InnoDB Migration Script v2
+# ISFDB InnoDB Copy Script
 # =====================================================
-# Refactored version using mysql_innodb_lib.sh
+# Copies the ISFDB database into a second database with every table
+# in InnoDB and every value unchanged. The source is never modified.
 
 # Source the library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/mysql_innodb_lib.sh"
 
 # Configuration
-DB_NAME="isfdb"
+SOURCE_DB="isfdb"
+TARGET_DB="isfdb_innodb"
+# The copy is built in <target>_next; the replaced target tables pass through <target>_old
+SCRATCH_SUFFIX="_next"
+OLD_TARGET_SUFFIX="_old"
+
+# The copy is rebuilt from the dump, never replicated, so its writes stay out of the binary log
+NO_BINLOG="SET SESSION sql_log_bin = 0;"
 
 # =====================================================
-# Main Migration Functions
+# Main Copy Functions
 # =====================================================
 
-# Display migration confirmation and get user approval
+# Display copy confirmation and get user approval
 # Args: $1 = total tables, $2 = total size (MB), $3 = estimated minutes
 confirm_migration() {
     local total_tables="$1"
     local total_size="$2"
     local estimated_minutes="$3"
 
-    print_header "Migration Confirmation"
+    print_header "Copy Confirmation"
     echo ""
-    echo -e "Database:     ${CYAN}${DB_NAME}${NC}"
+    echo -e "Source:       ${CYAN}${SOURCE_DB}${NC}"
+    echo -e "Target:       ${CYAN}${TARGET_DB}${NC}"
     echo -e "Connection:   ${CYAN}${CONNECTION_LABEL}${NC}"
-    echo -e "Tables:       ${CYAN}${total_tables}${NC} MyISAM → InnoDB"
+    echo -e "Tables:       ${CYAN}${total_tables}${NC} → InnoDB"
     echo -e "Total size:   ${CYAN}${total_size} MB${NC}"
     echo -e "Est. time:    ${CYAN}~${estimated_minutes} minutes${NC}"
     echo ""
-    print_warn "⚠  The database will be locked during conversion"
-    print_warn "⚠  Make sure you have a backup before proceeding"
+    print_info "${SOURCE_DB} stays untouched"
+    print_warn "⚠  ${TARGET_DB} will be replaced by the new copy"
     echo ""
 
-    if ! confirm "Do you want to proceed with migration?"; then
-        print_info "Migration cancelled"
+    if ! confirm "Do you want to proceed with the copy?"; then
+        print_info "Copy cancelled"
         return 1
     fi
     return 0
 }
 
-# Convert a single table from MyISAM to InnoDB
-# Args: $1 = mysql command, $2 = database name, $3 = table name, $4 = current count, $5 = total count, $6 = mysql version
-# Returns: 0 on success, 1 on failure
-convert_table() {
+# Drop and recreate the scratch database, which also clears what a failed run left behind
+# Args: $1 = mysql command, $2 = scratch database
+prepare_scratch_database() {
     local mysql_cmd="$1"
-    local db_name="$2"
-    local table="$3"
-    local current="$4"
-    local total="$5"
-    local mysql_version="$6"
+    local scratch_db="$2"
 
-    # Get table info
-    local table_info=$(get_table_info "${mysql_cmd}" "${db_name}" "${table}")
-    local table_rows=$(echo "$table_info" | awk '{print $1}')
-    local table_size=$(echo "$table_info" | awk '{print $2}')
-
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    print_info "[${current}/${total}] Converting: ${CYAN}${table}${NC}"
-    echo -e "Rows: ${table_rows} | Size: ${table_size} MB"
-
-
-    if ! check_and_fix_dates "${mysql_cmd}" "${db_name}" "${table}"; then
-        print_warn "⚠ Date fixing encountered issues but continuing..."
-    fi
-    echo ""
-
-    # Convert table
-    print_step "Converting to InnoDB..."
-    local table_start=$(date +%s)
-
-    if convert_to_innodb "${mysql_cmd}" "${db_name}" "${table}"; then
-        local table_end=$(date +%s)
-        local table_duration=$((table_end - table_start))
-        print_info "✓ Converted in ${table_duration} seconds"
-
-        # Verify conversion
-        local new_engine=$(get_table_engine "${mysql_cmd}" "${db_name}" "${table}")
-
-        if [ "$new_engine" = "InnoDB" ]; then
-            print_info "✓ Verified: ${table} is now ${GREEN}InnoDB${NC}"
-
-
-        else
-            print_warn "⚠ Engine is ${new_engine}, not InnoDB"
-            return 1
-        fi
-    else
-        print_error "✗ Failed to convert ${table}"
-        return 1
-    fi
-
-    return 0
+    print_step "Preparing ${CYAN}${scratch_db}${NC}..."
+    ${mysql_cmd} -e "
+        ${NO_BINLOG}
+        DROP DATABASE IF EXISTS \`${scratch_db}\`;
+        CREATE DATABASE \`${scratch_db}\`;
+    " 2>&1
 }
 
-# Analyze all converted tables (updates index statistics)
+# Copy one table into the scratch database as InnoDB, values unchanged
+# Each mysql call is a new session, so the SETs must share the call with the statements.
+# The sql_mode lets zero and partial dates through whatever the server default is.
+# Args: $1 = mysql command, $2 = source database, $3 = scratch database, $4 = table name
+copy_table() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local scratch_db="$3"
+    local table="$4"
+
+    ${mysql_cmd} -e "
+        ${NO_BINLOG}
+        SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION';
+        CREATE TABLE \`${scratch_db}\`.\`${table}\` LIKE \`${source_db}\`.\`${table}\`;
+        ALTER TABLE \`${scratch_db}\`.\`${table}\` ENGINE = InnoDB;
+        INSERT INTO \`${scratch_db}\`.\`${table}\` SELECT * FROM \`${source_db}\`.\`${table}\`;
+    " 2>&1
+}
+
+# Copy every table; a failed table is reported and the copy goes on
+# Args: $1 = mysql command, $2 = source database, $3 = scratch database, $4 = table list (newline-separated)
+# Returns: 1 if any table failed
+copy_tables() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local scratch_db="$3"
+    local tables="$4"
+
+    local total=$(echo "$tables" | wc -l)
+    local current=0
+    local failed=""
+    local output
+
+    while IFS= read -r table; do
+        current=$((current + 1))
+        local table_info=$(get_table_info "${mysql_cmd}" "${source_db}" "${table}")
+
+        echo ""
+        print_separator
+        print_info "[${current}/${total}] Copying: ${CYAN}${table}${NC}"
+        echo -e "Rows: $(echo "$table_info" | awk '{print $1}') | Size: $(echo "$table_info" | awk '{print $2}') MB"
+
+        local table_start=$(date +%s)
+        if output=$(copy_table "${mysql_cmd}" "${source_db}" "${scratch_db}" "${table}"); then
+            print_info "✓ Copied in $(($(date +%s) - table_start)) seconds"
+        else
+            print_error "✗ Failed to copy ${table}"
+            echo "$output" | sed 's/^/    /'
+            failed="${failed}${table}\n"
+        fi
+    done <<< "$tables"
+
+    if [ -n "$failed" ]; then
+        echo ""
+        print_error "Failed tables:"
+        echo -e "$failed" | sed '/^$/d; s/^/  /'
+        return 1
+    fi
+}
+
+# Analyze all copied tables (updates index statistics)
+# NO_WRITE_TO_BINLOG keeps ANALYZE out of the binary log like the rest of the copy.
 # Args: $1 = mysql command, $2 = database name, $3 = table list (newline-separated)
-analyze_converted_tables() {
+analyze_copied_tables() {
     local mysql_cmd="$1"
     local db_name="$2"
     local tables="$3"
 
-    print_header "Analyzing Converted Tables"
-    print_info "Running ANALYZE TABLE on all converted InnoDB tables..."
+    print_header "Analyzing Copied Tables"
+    print_info "Running ANALYZE TABLE on all copied tables..."
     echo ""
 
     local total_tables=$(echo "$tables" | wc -l)
@@ -115,7 +144,7 @@ analyze_converted_tables() {
         analyze_count=$((analyze_count + 1))
         echo -e "${CYAN}[${analyze_count}/${total_tables}]${NC} Analyzing ${CYAN}${table}${NC}..."
 
-        if analyze_table "${mysql_cmd}" "${db_name}" "${table}"; then
+        if run_table_maintenance "${mysql_cmd}" "${db_name}" "ANALYZE NO_WRITE_TO_BINLOG" "${table}"; then
             print_info "✓ Analyzed ${CYAN}${table}${NC}"
         else
             print_warn "⚠ Failed to analyze ${CYAN}${table}${NC}"
@@ -132,104 +161,64 @@ analyze_converted_tables() {
     fi
 }
 
-# Warm up InnoDB buffer pool by loading table data and indexes
-# Args: $1 = mysql command, $2 = database name, $3 = table list (newline-separated)
-warmup_buffer_pool() {
+# Move the scratch tables into the target with one atomic RENAME TABLE
+# The tables the target holds now move to the old-target database, which is dropped afterwards,
+# so the target ends up with exactly the scratch tables.
+# Args: $1 = mysql command, $2 = scratch database, $3 = target database, $4 = old-target database
+swap_into_target() {
     local mysql_cmd="$1"
-    local db_name="$2"
-    local tables="$3"
+    local scratch_db="$2"
+    local target_db="$3"
+    local old_target_db="$4"
 
-    print_header "Warming Up InnoDB Buffer Pool"
-    print_info "Loading table data and indexes into memory..."
-    print_warn "Note: This may take some time for large tables"
-    echo ""
+    local target_existed
+    target_existed=$(${mysql_cmd} -s -N -e "
+        SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${target_db}';
+    " 2>&1) || {
+        echo "$target_existed"
+        return 1
+    }
+    local current_tables=""
+    if [ "$target_existed" = "1" ]; then
+        current_tables=$(get_tables_by_engine "${mysql_cmd}" "${target_db}" "") || {
+            echo "$current_tables"
+            return 1
+        }
+    fi
+    local scratch_tables
+    scratch_tables=$(get_tables_by_engine "${mysql_cmd}" "${scratch_db}" "") || {
+        echo "$scratch_tables"
+        return 1
+    }
 
-    local total_tables=$(echo "$tables" | wc -l)
-    local current_table=0
-    local success_count=0
-    local failed_count=0
-    local total_queries=0
-    local failed_queries=0
-
+    local renames=""
+    local table
     while IFS= read -r table; do
-        current_table=$((current_table + 1))
-        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${CYAN}[${current_table}/${total_tables}]${NC} Warming up ${CYAN}${table}${NC}"
-        echo ""
+        [ -n "$table" ] && renames="${renames}, \`${target_db}\`.\`${table}\` TO \`${old_target_db}\`.\`${table}\`"
+    done <<< "$current_tables"
+    while IFS= read -r table; do
+        renames="${renames}, \`${scratch_db}\`.\`${table}\` TO \`${target_db}\`.\`${table}\`"
+    done <<< "$scratch_tables"
 
-        local table_success=1
-
-        # Warm up table data (full table scan)
-        print_step "Loading table data..."
-        local result=$(warmup_table_data "${mysql_cmd}" "${db_name}" "${table}")
-        local duration=$(echo "$result" | cut -d: -f1)
-        local precision=$(echo "$result" | cut -d: -f2)
-        local exit_code=$(echo "$result" | cut -d: -f3)
-
-        total_queries=$((total_queries + 1))
-
-        if [ "$exit_code" -eq 0 ]; then
-            local formatted_time=$(format_duration_detailed "$duration" "$precision")
-            echo -e "  ${GREEN}✓${NC} Table data loaded (${formatted_time})"
-        else
-            echo -e "  ${YELLOW}⚠${NC} Failed to load table data"
-            failed_queries=$((failed_queries + 1))
-            table_success=0
+    if ! ${mysql_cmd} -e "
+        ${NO_BINLOG}
+        DROP DATABASE IF EXISTS \`${old_target_db}\`;
+        CREATE DATABASE \`${old_target_db}\`;
+        CREATE DATABASE IF NOT EXISTS \`${target_db}\`;
+        RENAME TABLE ${renames#, };
+        DROP DATABASE \`${old_target_db}\`;
+        DROP DATABASE \`${scratch_db}\`;
+    " 2>&1; then
+        # Tables only land in the old-target database when the RENAME succeeded
+        if [ -z "$(get_tables_by_engine "${mysql_cmd}" "${old_target_db}" "")" ]; then
+            ${mysql_cmd} -e "${NO_BINLOG} DROP DATABASE IF EXISTS \`${old_target_db}\`;" 2>&1
         fi
-
-        # Warm up indexes
-        print_step "Loading indexes..."
-        local indexes=$(get_regular_indexes "${mysql_cmd}" "${db_name}" "${table}")
-
-        if [ -z "$indexes" ]; then
-            echo -e "  ${CYAN}→${NC} No indexes to warm up"
-        else
-            local index_count=$(echo "$indexes" | wc -l)
-            local current_index=0
-
-            while IFS=: read -r index_name columns; do
-                current_index=$((current_index + 1))
-                total_queries=$((total_queries + 1))
-
-                result=$(warmup_index "${mysql_cmd}" "${db_name}" "${table}" "${index_name}" "${columns}")
-                duration=$(echo "$result" | cut -d: -f1)
-                precision=$(echo "$result" | cut -d: -f2)
-                exit_code=$(echo "$result" | cut -d: -f3)
-
-                if [ "$exit_code" -eq 0 ]; then
-                    formatted_time=$(format_duration_detailed "$duration" "$precision")
-                    echo -e "  ${GREEN}✓${NC} Index ${CYAN}${index_name}${NC} loaded (${formatted_time})"
-                else
-                    echo -e "  ${YELLOW}⚠${NC} Index ${CYAN}${index_name}${NC} failed"
-                    failed_queries=$((failed_queries + 1))
-                    table_success=0
-                fi
-            done <<< "$indexes"
+        # A target this call created and the failed RENAME left empty is not a copy
+        if [ "$target_existed" = "0" ] && [ -z "$(get_tables_by_engine "${mysql_cmd}" "${target_db}" "")" ]; then
+            ${mysql_cmd} -e "${NO_BINLOG} DROP DATABASE IF EXISTS \`${target_db}\`;" 2>&1
         fi
-
-        echo ""
-
-        if [ "$table_success" -eq 1 ]; then
-            success_count=$((success_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-        fi
-
-    done <<< "$tables"
-
-    # Summary
-    print_separator
-    echo ""
-    if [ $failed_count -eq 0 ]; then
-        print_info "✓ All ${total_tables} table(s) warmed up successfully"
-        print_info "Total queries executed: ${CYAN}${total_queries}${NC}"
-    else
-        print_warn "⚠ ${failed_count} table(s) had failures, ${success_count} succeeded"
-        print_info "Successful queries: ${CYAN}$((total_queries - failed_queries))${NC}/${total_queries}"
-        echo ""
         return 1
     fi
-    echo ""
 }
 
 # Show final table sizes and space difference
@@ -268,36 +257,10 @@ show_final_sizes() {
     ")
 
     echo ""
-    print_info "Total size of converted tables: ${CYAN}${final_size} MB${NC}"
+    print_info "Total size of copied tables: ${CYAN}${final_size} MB${NC}"
 
     # Show space difference
     display_space_difference "$original_size" "$final_size"
-}
-
-# Verify migration results
-# Args: $1 = mysql command, $2 = database name
-verify_migration() {
-    local mysql_cmd="$1"
-    local db_name="$2"
-
-    print_header "Verification"
-
-    local remaining_myisam=$(${mysql_cmd} -D "${db_name}" -s -N -e "
-        SELECT COUNT(*)
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = '${db_name}'
-        AND ENGINE = 'MyISAM';
-    ")
-
-    if [ "$remaining_myisam" -eq 0 ]; then
-        print_info "✓ No MyISAM tables remaining"
-    else
-        print_warn "⚠ ${remaining_myisam} MyISAM tables still exist"
-    fi
-
-    echo ""
-    print_step "Final engine distribution:"
-    display_engine_distribution "${mysql_cmd}" "${db_name}"
 }
 
 # =====================================================
@@ -306,188 +269,62 @@ verify_migration() {
 
 main() {
     parse_connection_args "$@" || exit 1
+    SCRATCH_DB="${TARGET_DB}${SCRATCH_SUFFIX}"
+    OLD_TARGET_DB="${TARGET_DB}${OLD_TARGET_SUFFIX}"
     connect_mysql || exit 1
 
     echo ""
+    print_header "Discovering Source Tables"
 
-    # Discover MyISAM tables
-    print_header "Discovering MyISAM Tables"
-
-    MYISAM_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "MyISAM") || {
-        print_error "Failed to query database: $MYISAM_TABLES"
+    SOURCE_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${SOURCE_DB}" "") || {
+        print_error "Failed to query database: $SOURCE_TABLES"
         exit 1
     }
-    MIGRATION_NEEDED=0
-
-    if [ -z "$MYISAM_TABLES" ]; then
-        print_info "✓ No MyISAM tables found"
-        echo ""
-
-        # Get existing InnoDB tables for optimization/warmup
-        print_header "Existing InnoDB Tables"
-        INNODB_TABLES=$(get_tables_by_engine "${MYSQL_CMD}" "${DB_NAME}" "InnoDB") || {
-            print_error "Failed to query database: $INNODB_TABLES"
-            exit 1
-        }
-
-        if [ -z "$INNODB_TABLES" ]; then
-            print_warn "No InnoDB tables found in database"
-            exit 0
-        fi
-
-        TOTAL_TABLES=$(echo "$INNODB_TABLES" | wc -l)
-        print_info "Found ${CYAN}${TOTAL_TABLES}${NC} InnoDB tables"
-        echo ""
-
-        # Display table details
-        print_step "Table details (sorted by size):"
-        display_table_details "${MYSQL_CMD}" "${DB_NAME}" "InnoDB"
-
-        TOTAL_SIZE=$(get_total_size "${MYSQL_CMD}" "${DB_NAME}" "InnoDB")
-        print_info "Total size: ${CYAN}${TOTAL_SIZE} MB${NC}"
-        echo ""
-
-        # Ask user what they want to do
-        print_header "Available Operations"
-        echo ""
-        confirm "Would you like to analyze existing InnoDB tables?" && RUN_ANALYZE="yes"
-        confirm "Would you like to warm up the buffer pool?" && RUN_WARMUP="yes"
-        echo ""
-
-        if [ "$RUN_ANALYZE" != "yes" ] && [ "$RUN_WARMUP" != "yes" ]; then
-            print_info "No operations selected. Showing current status..."
-            echo ""
-
-            # Show engine distribution
-            print_header "Database Status"
-            display_engine_distribution "${MYSQL_CMD}" "${DB_NAME}"
-            echo ""
-
-            # Show buffer pool configuration
-            display_innodb_recommendations "${MYSQL_CMD}" "${TOTAL_SIZE}"
-            echo ""
-            print_info "✓ Done!"
-            echo ""
-            exit 0
-        fi
-
-        # Use InnoDB tables for operations
-        TABLES_TO_PROCESS="$INNODB_TABLES"
-        MIGRATION_NEEDED=0
-    else
-        TOTAL_TABLES=$(echo "$MYISAM_TABLES" | wc -l)
-        print_info "Found ${CYAN}${TOTAL_TABLES}${NC} MyISAM tables to convert"
-        echo ""
-
-        # Display table details
-        print_step "Table details (sorted by size):"
-        display_table_details "${MYSQL_CMD}" "${DB_NAME}" "MyISAM"
-
-        TOTAL_SIZE=$(get_total_size "${MYSQL_CMD}" "${DB_NAME}" "MyISAM")
-        print_info "Total size to migrate: ${CYAN}${TOTAL_SIZE} MB${NC}"
-
-        ESTIMATED_MINUTES=$(estimate_migration_time "${TOTAL_SIZE}")
-        print_info "Estimated migration time: ${CYAN}~${ESTIMATED_MINUTES} minutes${NC}"
-        echo ""
-
-        # Confirmation
-        confirm_migration "${TOTAL_TABLES}" "${TOTAL_SIZE}" "${ESTIMATED_MINUTES}" || exit 0
-
-        # Use MyISAM tables for migration
-        TABLES_TO_PROCESS="$MYISAM_TABLES"
-        MIGRATION_NEEDED=1
-        RUN_ANALYZE="yes"
-        RUN_WARMUP="yes"
-    fi
-
-    # Start migration (only if MyISAM tables found)
-    FAILED_TABLES=""
-    FOLLOW_UP_FAILED=0
-    if [ "$MIGRATION_NEEDED" -eq 1 ]; then
-        echo ""
-        print_header "Starting Migration"
-        START_TIME=$(date +%s)
-
-        CURRENT=0
-
-        # Convert each table
-        while IFS= read -r TABLE; do
-            CURRENT=$((CURRENT + 1))
-
-            if ! convert_table "${MYSQL_CMD}" "${DB_NAME}" "${TABLE}" "${CURRENT}" "${TOTAL_TABLES}" "${MYSQL_VERSION}"; then
-                FAILED_TABLES="${FAILED_TABLES}${TABLE}\n"
-            fi
-
-        done <<< "$TABLES_TO_PROCESS"
-
-        END_TIME=$(date +%s)
-        TOTAL_DURATION=$((END_TIME - START_TIME))
-        TOTAL_MINUTES=$((TOTAL_DURATION / 60))
-        TOTAL_SECONDS=$((TOTAL_DURATION % 60))
-
-        # Summary
-        echo ""
-        print_header "Migration Complete"
-        echo ""
-        print_info "Total time:       ${CYAN}${TOTAL_MINUTES}m ${TOTAL_SECONDS}s${NC}"
-        print_info "Tables processed: ${CYAN}${TOTAL_TABLES}${NC}"
-        echo ""
-
-        if [ -n "$FAILED_TABLES" ]; then
-            print_error "Failed tables:"
-            echo -e "$FAILED_TABLES" | sed 's/^/  /'
-            echo ""
-        else
-            print_info "✓ All tables converted successfully!"
-        fi
-
-        # Verification
-        echo ""
-        verify_migration "${MYSQL_CMD}" "${DB_NAME}"
-    fi
-
-    # Analyze tables (if requested or after migration)
-    if [ "$RUN_ANALYZE" = "yes" ] && [ -z "$FAILED_TABLES" ]; then
-        echo ""
-        analyze_converted_tables "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" || FOLLOW_UP_FAILED=1
-    fi
-
-    # Warm up buffer pool (if requested or after migration)
-    if [ "$RUN_WARMUP" = "yes" ] && [ -z "$FAILED_TABLES" ]; then
-        echo ""
-        warmup_buffer_pool "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" || FOLLOW_UP_FAILED=1
-    fi
-
-    # Show final table sizes
-    if [ "$MIGRATION_NEEDED" -eq 1 ]; then
-        # Show sizes for migrated tables
-        echo ""
-        show_final_sizes "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS" "${TOTAL_SIZE}"
-        # The recommendation needs the InnoDB size, not the MyISAM size from before the migration
-        TOTAL_SIZE=$(get_total_size "${MYSQL_CMD}" "${DB_NAME}" "InnoDB")
-    elif [ "$RUN_ANALYZE" = "yes" ] || [ "$RUN_WARMUP" = "yes" ]; then
-        # Show sizes for existing InnoDB tables after operations
-        echo ""
-        print_header "Final Table Sizes"
-        echo ""
-        display_detailed_sizes "${MYSQL_CMD}" "${DB_NAME}" "$TABLES_TO_PROCESS"
-        echo ""
-    fi
-
-    # InnoDB configuration analysis
+    TOTAL_TABLES=$(echo "$SOURCE_TABLES" | wc -l)
+    print_info "Found ${CYAN}${TOTAL_TABLES}${NC} tables in ${CYAN}${SOURCE_DB}${NC}"
     echo ""
-    display_innodb_recommendations "${MYSQL_CMD}" "${TOTAL_SIZE}"
+
+    print_step "Table details (sorted by size):"
+    display_table_details "${MYSQL_CMD}" "${SOURCE_DB}" ""
+
+    TOTAL_SIZE=$(get_total_size "${MYSQL_CMD}" "${SOURCE_DB}" "")
+    print_info "Total size to copy: ${CYAN}${TOTAL_SIZE} MB${NC}"
+
+    ESTIMATED_MINUTES=$(estimate_migration_time "${TOTAL_SIZE}")
+    print_info "Estimated copy time: ${CYAN}~${ESTIMATED_MINUTES} minutes${NC}"
+    echo ""
+
+    confirm_migration "${TOTAL_TABLES}" "${TOTAL_SIZE}" "${ESTIMATED_MINUTES}" || exit 0
 
     echo ""
-    if [ "$MIGRATION_NEEDED" -eq 1 ]; then
-        print_info "Migration completed at: ${CYAN}$(date)${NC}"
-    else
-        print_info "Operations completed at: ${CYAN}$(date)${NC}"
-    fi
+    print_header "Copying Tables"
+    START_TIME=$(date +%s)
+
+    prepare_scratch_database "${MYSQL_CMD}" "${SCRATCH_DB}" || {
+        print_error "Failed to prepare ${SCRATCH_DB}"
+        exit 1
+    }
+    copy_tables "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
+
+    echo ""
+    analyze_copied_tables "${MYSQL_CMD}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
+
+    echo ""
+    print_header "Replacing ${TARGET_DB}"
+    swap_into_target "${MYSQL_CMD}" "${SCRATCH_DB}" "${TARGET_DB}" "${OLD_TARGET_DB}" || {
+        print_error "Failed to move the copy into ${TARGET_DB}"
+        exit 1
+    }
+    print_info "✓ ${TARGET_DB} holds the new copy"
+    print_info "Total time: ${CYAN}$(format_duration $(($(date +%s) - START_TIME)))${NC}"
+
+    echo ""
+    show_final_sizes "${MYSQL_CMD}" "${TARGET_DB}" "${SOURCE_TABLES}" "${TOTAL_SIZE}"
+
+    echo ""
+    print_info "Copy completed at: ${CYAN}$(date)${NC}"
     print_info "✓ Done!"
     echo ""
-
-    [ -z "$FAILED_TABLES" ] && [ "$FOLLOW_UP_FAILED" -eq 0 ] || exit 1
 }
 
 # Run main
