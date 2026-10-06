@@ -88,8 +88,6 @@ The analysis script:
 - Finds all InnoDB tables of `isfdb_innodb` (or `--database DB`)
 - Runs `ANALYZE TABLE` on each (updates index statistics for query optimizer)
 - Shows detailed size information (data/index breakdown)
-- Analyzes InnoDB buffer pool configuration
-- Provides configuration recommendations
 
 ### Examples
 
@@ -116,22 +114,6 @@ Or with a credentials file:
 
 ```bash
 ./dynamic_migration.sh --yes --defaults-extra-file /run/secrets/isfdb.cnf
-```
-
-## Buffer Pool Recommendations
-
-Both scripts provide InnoDB buffer pool sizing recommendations based on:
-- Total system RAM
-- Current database size
-- MySQL best practices (typically 70-80% of RAM for dedicated servers)
-
-The recommendation is never below 128 MB, MySQL's default.
-
-Apply recommendations in your MySQL configuration:
-
-```ini
-[mysqld]
-innodb_buffer_pool_size = 8G
 ```
 
 ## Tests

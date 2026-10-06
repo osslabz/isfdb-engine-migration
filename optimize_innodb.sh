@@ -7,8 +7,6 @@
 # - Finds all InnoDB tables in a database (default isfdb_innodb)
 # - Optimizes them
 # - Shows detailed size information
-# - Analyzes InnoDB buffer pool configuration
-# - Provides recommendations for optimal settings
 #
 # Usage:
 #   ./optimize_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--database DB] [login-path-name]
@@ -62,9 +60,6 @@ main() {
 
     # Display final results
     display_final_results
-
-    # Configuration analysis
-    analyze_configuration
 
     # Display summary
     display_summary
@@ -164,16 +159,6 @@ display_final_results() {
 }
 
 # =====================================================
-# CONFIGURATION ANALYSIS
-# =====================================================
-
-analyze_configuration() {
-    echo ""
-    print_header "InnoDB Configuration Analysis"
-    display_innodb_recommendations "${MYSQL_CMD}" "$TOTAL_SIZE_AFTER"
-}
-
-# =====================================================
 # DISPLAY SUMMARY
 # =====================================================
 
@@ -184,15 +169,6 @@ display_summary() {
     print_info "Tables optimized:     ${CYAN}${TOTAL_TABLES}${NC}"
     print_info "Optimization time:    ${CYAN}${OPTIMIZATION_TIME}${NC}"
     print_info "Final database size:  ${CYAN}${TOTAL_SIZE_AFTER} MB${NC}"
-
-    local total_ram_mb
-    total_ram_mb=$(get_system_ram)
-    if [ "$total_ram_mb" != "unknown" ]; then
-        local buffer_pool_mb
-        buffer_pool_mb=$(get_buffer_pool_size "${MYSQL_CMD}")
-        local buffer_pool_percent=$((buffer_pool_mb * 100 / total_ram_mb))
-        print_info "Buffer pool status:   ${CYAN}${buffer_pool_mb} MB${NC} (${buffer_pool_percent}% of RAM)"
-    fi
 
     echo ""
     print_info "✓ Done!"

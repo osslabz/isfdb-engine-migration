@@ -320,6 +320,17 @@ test_optimize_takes_database() {
     assert_log_contains "Found 1 InnoDB tables"
 }
 
+test_helpers_print_no_buffer_pool_advice() {
+    run_migration
+    : > "$(log_file)"
+    run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
+    assert_eq "analyze exit code" 0 "$?"
+    run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
+    assert_eq "optimize exit code" 0 "$?"
+    assert_log_lacks "Buffer pool"
+    assert_log_lacks "InnoDB Configuration Analysis"
+}
+
 test_helpers_reject_invalid_database() {
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database 'bad-name'
     assert_eq "analyze exit code" 1 "$?"
