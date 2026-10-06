@@ -448,11 +448,15 @@ test_helpers_print_no_buffer_pool_advice() {
     assert_log_lacks "InnoDB Configuration Analysis"
 }
 
-test_helpers_reject_invalid_database() {
+test_analyze_rejects_invalid_database() {
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database 'bad-name'
-    assert_eq "analyze exit code" 1 "$?"
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
+}
+
+test_optimize_rejects_invalid_database() {
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes --database 'bad-name'
-    assert_eq "optimize exit code" 1 "$?"
+    assert_eq "exit code" 1 "$?"
     assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
 }
 
