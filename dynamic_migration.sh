@@ -44,8 +44,8 @@ confirm_migration() {
     echo -e "Total size:   ${CYAN}${total_size} MB${NC}"
     echo -e "Est. time:    ${CYAN}~${estimated_minutes} minutes${NC}"
     echo ""
-    print_info "${SOURCE_DB} stays untouched"
-    print_warn "⚠  ${TARGET_DB} will be replaced by the new copy"
+    print_info "${CYAN}${SOURCE_DB}${NC} stays untouched"
+    print_warn "⚠  ${CYAN}${TARGET_DB}${NC} will be replaced by the new copy"
     echo ""
 
     if ! confirm "Do you want to proceed with the copy?"; then
@@ -71,11 +71,11 @@ validate_database_names() {
     local derived
     for derived in "${target_db}${SCRATCH_SUFFIX}" "${target_db}${OLD_TARGET_SUFFIX}"; do
         if [ "${derived}" = "${source_db}" ]; then
-            print_error "--source must not be ${derived}, the copy uses it for scratch"
+            print_error "--source must not be ${CYAN}${derived}${NC}, the copy uses it for scratch"
             return 1
         fi
         if [ ${#derived} -gt "$MAX_DATABASE_NAME_LENGTH" ]; then
-            print_error "--target is too long: ${derived} exceeds ${MAX_DATABASE_NAME_LENGTH} characters"
+            print_error "--target is too long: ${CYAN}${derived}${NC} exceeds ${MAX_DATABASE_NAME_LENGTH} characters"
             return 1
         fi
     done
@@ -141,7 +141,7 @@ copy_tables() {
         if output=$(copy_table "${mysql_cmd}" "${source_db}" "${scratch_db}" "${table}"); then
             print_info "✓ Copied in $(($(date +%s) - table_start)) seconds"
         else
-            print_error "✗ Failed to copy ${table}"
+            print_error "✗ Failed to copy ${CYAN}${table}${NC}"
             echo "$output" | sed 's/^/    /'
             failed="${failed}${table}\n"
         fi
@@ -213,14 +213,14 @@ verify_table_names() {
 
     local copy_tables
     copy_tables=$(get_tables_by_engine "${mysql_cmd}" "${copy_db}" "") || {
-        print_error "✗ Listing the tables of ${copy_db} failed: ${copy_tables}"
+        print_error "✗ Listing the tables of ${CYAN}${copy_db}${NC} failed: ${copy_tables}"
         return 1
     }
     source_tables=$(echo "$source_tables" | sort)
     copy_tables=$(echo "$copy_tables" | sort)
 
     if [ "$source_tables" != "$copy_tables" ]; then
-        print_error "✗ Tables differ between ${source_db} and ${copy_db}:"
+        print_error "✗ Tables differ between ${CYAN}${source_db}${NC} and ${CYAN}${copy_db}${NC}:"
         comm -23 <(echo "$source_tables") <(echo "$copy_tables") | sed "s/^/  only in ${source_db}: /"
         comm -13 <(echo "$source_tables") <(echo "$copy_tables") | sed "s/^/  only in ${copy_db}: /"
         return 1
@@ -242,11 +242,11 @@ verify_engines() {
         AND ENGINE <> 'InnoDB'
         ORDER BY TABLE_NAME;
     " 2>&1) || {
-        print_error "✗ Listing the engines of ${copy_db} failed: ${not_innodb}"
+        print_error "✗ Listing the engines of ${CYAN}${copy_db}${NC} failed: ${not_innodb}"
         return 1
     }
     if [ -n "$not_innodb" ]; then
-        print_error "✗ Tables not InnoDB in ${copy_db}:"
+        print_error "✗ Tables not InnoDB in ${CYAN}${copy_db}${NC}:"
         echo "$not_innodb" | sed 's/^/  /'
         return 1
     fi
@@ -274,7 +274,7 @@ verify_row_counts() {
             continue
         }
         if [ "$source_count" != "$copy_count" ]; then
-            print_error "✗ ${table}: ${source_count} rows in ${source_db}, ${copy_count} in ${copy_db}"
+            print_error "✗ ${CYAN}${table}${NC}: ${source_count} rows in ${CYAN}${source_db}${NC}, ${copy_count} in ${CYAN}${copy_db}${NC}"
             failed=1
         fi
     done <<< "$tables"
@@ -295,7 +295,7 @@ verify_zero_dates() {
     local columns source_count copy_count
     while IFS= read -r table; do
         columns=$(get_date_columns "${mysql_cmd}" "${source_db}" "${table}") || {
-            print_error "✗ Listing the date columns of ${table} failed: ${columns}"
+            print_error "✗ Listing the date columns of ${CYAN}${table}${NC} failed: ${columns}"
             failed=1
             continue
         }
@@ -312,7 +312,7 @@ verify_zero_dates() {
                 continue
             }
             if [ "$source_count" != "$copy_count" ]; then
-                print_error "✗ ${table}.${column}: ${source_count} zero or partial dates in ${source_db}, ${copy_count} in ${copy_db}"
+                print_error "✗ ${CYAN}${table}.${column}${NC}: ${source_count} zero or partial dates in ${CYAN}${source_db}${NC}, ${copy_count} in ${CYAN}${copy_db}${NC}"
                 failed=1
             fi
         done <<< "$columns"
@@ -333,14 +333,14 @@ verify_partial_dates_kept() {
     partial=$(${mysql_cmd} -s -N -e "
         SELECT COUNT(*) FROM \`${copy_db}\`.pubs WHERE CAST(pub_year AS CHAR) LIKE '%-00';
     " 2>&1) || {
-        print_error "✗ Counting the partial dates of ${copy_db}.pubs failed: ${partial}"
+        print_error "✗ Counting the partial dates of ${CYAN}${copy_db}.pubs${NC} failed: ${partial}"
         return 1
     }
     if [ "$partial" -eq 0 ]; then
-        print_error "✗ ${copy_db}.pubs.pub_year has no partial date (YYYY-MM-00); the source looks rewritten"
+        print_error "✗ ${CYAN}${copy_db}.pubs.pub_year${NC} has no partial date (YYYY-MM-00); the source looks rewritten"
         return 1
     fi
-    print_info "✓ ${copy_db}.pubs.pub_year keeps ${partial} partial dates"
+    print_info "✓ ${CYAN}${copy_db}.pubs.pub_year${NC} keeps ${partial} partial dates"
 }
 
 # Compare the copy with its source; the checks after the table names need the same tables
@@ -495,7 +495,7 @@ main() {
     START_TIME=$(date +%s)
 
     prepare_scratch_database "${MYSQL_CMD}" "${SCRATCH_DB}" || {
-        print_error "Failed to prepare ${SCRATCH_DB}"
+        print_error "Failed to prepare ${CYAN}${SCRATCH_DB}${NC}"
         exit 1
     }
     copy_tables "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
@@ -509,7 +509,7 @@ main() {
     echo ""
     print_header "Replacing ${TARGET_DB}"
     swap_into_target "${MYSQL_CMD}" "${SCRATCH_DB}" "${TARGET_DB}" "${OLD_TARGET_DB}" || exit 1
-    print_info "✓ ${TARGET_DB} holds the new copy"
+    print_info "✓ ${CYAN}${TARGET_DB}${NC} holds the new copy"
     print_info "Total time: ${CYAN}$(format_duration $(($(date +%s) - START_TIME)))${NC}"
 
     echo ""
