@@ -115,8 +115,8 @@ Before the swap the script checks `<target>_next` against the source:
 - every table InnoDB;
 - the same row count per table, by `COUNT(*)`, because `TABLE_ROWS` is only an estimate for InnoDB;
 - per `date`, `datetime` and `timestamp` column, the same number of values with a zero year, month or day;
-- `pubs.pub_year` still has values with an unknown day (`YYYY-MM-00`). None means the source went
-  through a date rewrite.
+- `pubs.pub_year` still has values with an unknown day (`YYYY-MM-00`, which also counts `0000-00-00`).
+  None means the source went through a date rewrite.
 
 Any failed check exits 1. The last check is written for the ISFDB schema, so it fails on a source
 without a `pubs` table.
