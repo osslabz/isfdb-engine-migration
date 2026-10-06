@@ -261,9 +261,13 @@ verify_row_counts() {
     local failed=0
     local source_count copy_count
     while IFS= read -r table; do
-        source_count=$(count_rows "${mysql_cmd}" "${source_db}" "${table}") &&
-            copy_count=$(count_rows "${mysql_cmd}" "${copy_db}" "${table}") || {
-            print_error "✗ Counting the rows of ${table} failed: ${source_count} ${copy_count}"
+        source_count=$(count_rows "${mysql_cmd}" "${source_db}" "${table}") || {
+            print_error "✗ Counting the rows of ${CYAN}${table}${NC} in ${CYAN}${source_db}${NC} failed: ${source_count}"
+            failed=1
+            continue
+        }
+        copy_count=$(count_rows "${mysql_cmd}" "${copy_db}" "${table}") || {
+            print_error "✗ Counting the rows of ${CYAN}${table}${NC} in ${CYAN}${copy_db}${NC} failed: ${copy_count}"
             failed=1
             continue
         }
@@ -295,9 +299,13 @@ verify_zero_dates() {
         }
         [ -z "$columns" ] && continue
         while IFS= read -r column; do
-            source_count=$(count_zero_dates "${mysql_cmd}" "${source_db}" "${table}" "${column}") &&
-                copy_count=$(count_zero_dates "${mysql_cmd}" "${copy_db}" "${table}" "${column}") || {
-                print_error "✗ Counting the zero dates of ${table}.${column} failed: ${source_count} ${copy_count}"
+            source_count=$(count_zero_dates "${mysql_cmd}" "${source_db}" "${table}" "${column}") || {
+                print_error "✗ Counting the zero dates of ${CYAN}${table}.${column}${NC} in ${CYAN}${source_db}${NC} failed: ${source_count}"
+                failed=1
+                continue
+            }
+            copy_count=$(count_zero_dates "${mysql_cmd}" "${copy_db}" "${table}" "${column}") || {
+                print_error "✗ Counting the zero dates of ${CYAN}${table}.${column}${NC} in ${CYAN}${copy_db}${NC} failed: ${copy_count}"
                 failed=1
                 continue
             }

@@ -586,6 +586,33 @@ test_verify_reports_row_count() {
     assert_log_contains "titles: 5 rows in isfdb, 4 in bad_copy"
 }
 
+test_verify_reports_failed_source_row_count() {
+    run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
+    call_function verify_row_counts isfdb bad_copy "$(printf 'authors\nnope')"
+    assert_eq "exit code" 1 "$?"
+    assert_eq "output" "[ERROR] ✗ Counting the rows of nope in isfdb failed: ERROR 1146 (42S02) at line 1: Table 'isfdb.nope' doesn't exist" "$(log_text | tail -n 1)"
+}
+
+test_verify_reports_failed_copy_row_count() {
+    run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
+    sql -e "DROP TABLE bad_copy.authors"
+    call_function verify_row_counts isfdb bad_copy "$(printf 'titles\nauthors')"
+    assert_eq "exit code" 1 "$?"
+    assert_eq "output" "[ERROR] ✗ Counting the rows of authors in bad_copy failed: ERROR 1146 (42S02) at line 1: Table 'bad_copy.authors' doesn't exist" "$(log_text | tail -n 1)"
+}
+
+test_verify_reports_failed_copy_zero_date_count() {
+    run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
+    sql -e "DROP TABLE bad_copy.authors"
+    call_function verify_zero_dates isfdb bad_copy "$(printf 'titles\nauthors')"
+    assert_eq "exit code" 1 "$?"
+    assert_eq "output" "[ERROR] ✗ Counting the zero dates of authors.author_birthdate in bad_copy failed: ERROR 1146 (42S02) at line 2: Table 'bad_copy.authors' doesn't exist
+[ERROR] ✗ Counting the zero dates of authors.author_deathdate in bad_copy failed: ERROR 1146 (42S02) at line 2: Table 'bad_copy.authors' doesn't exist" "$(log_text | tail -n 2)"
+}
+
 test_verify_reports_changed_datetime_zero() {
     run_migration --target bad_copy
     assert_eq "migration exit code" 0 "$?"
