@@ -362,17 +362,41 @@ test_invalid_database_name() {
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
-test_target_too_long() {
-    run_migration --target "$(printf 'a%.0s' $(seq 1 60))"
+# Args: $1 = length
+name_of_length() {
+    printf 'a%.0s' $(seq 1 "$1")
+}
+
+# <target>_next is the longest derived name, so a 59-character target makes it exactly 64
+test_derived_name_at_length_limit() {
+    local target
+    target=$(name_of_length 59)
+    run_migration --target "$target"
+    assert_eq "exit code" 0 "$?"
+    assert_eq "checksums" "$(checksums isfdb)" "$(checksums "$target")"
+    assert_eq "databases" "${target} isfdb" "$(user_databases)"
+}
+
+test_derived_name_over_length_limit() {
+    local target
+    target=$(name_of_length 60)
+    run_migration --target "$target"
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "exceeds 64 characters"
+    assert_log_contains "--target is too long: ${target}_next exceeds 64 characters"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
 test_scratch_name_equals_source() {
     run_migration --source isfdb_next --target isfdb
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--source must not be isfdb_next"
+    assert_log_contains "--source must not be isfdb_next, the copy uses it for scratch"
+    assert_eq "databases" "isfdb" "$(user_databases)"
+}
+
+test_old_target_name_equals_source() {
+    run_migration --source isfdb_old --target isfdb
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "--source must not be isfdb_old, the copy uses it for scratch"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
