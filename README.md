@@ -1,41 +1,64 @@
 # isfdb-engine-migration
 
-Copies the Internet Speculative Fiction Database (ISFDB) into InnoDB tables, plus MySQL InnoDB maintenance tools.
+Copies the Internet Speculative Fiction Database (ISFDB) from its imported MyISAM tables into a separate
+database with every table in InnoDB and every value unchanged. The source is only read. The repository
+also has two InnoDB maintenance helpers.
+
+```bash
+./dynamic_migration.sh
+```
+
+## Why
+
+The ISFDB backup is a MySQL dump. Almost all of its tables are MyISAM. The next pipeline step,
+`codelabz-net/isfdb-schema-migration`, reads InnoDB tables only. InnoDB is MySQL's default engine. It is
+transactional and crash-safe, and it locks rows instead of whole tables.
+
+The script copies and does not convert in place. The imported database `isfdb` stays as dumped. Each
+pipeline step keeps its input, so its output can be compared with it after every step. This script
+compares its own copy with `isfdb` before it hands the copy on.
+
+## Pipeline
+
+```
+ISFDB backup -> import -> isfdb            (MyISAM, as dumped, never changed)
+                       -> dynamic_migration.sh
+                       -> isfdb_innodb     (InnoDB, values unchanged)
+                       -> isfdb-schema-migration
+                       -> target database
+```
+
+All databases live on one MySQL server. In isbn-bff, `infra/isfdb/refresh.sh` runs this step inside the
+MySQL container.
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `dynamic_migration.sh` | Copies the `isfdb` database into `isfdb_innodb`, every table InnoDB |
-| `analyze_innodb.sh` | Analyzes InnoDB tables (updates index statistics) |
-| `optimize_innodb.sh` | Optimizes InnoDB tables (rebuild + analyze) |
-| `mysql_innodb_lib.sh` | Shared function library (sourced by the scripts above) |
+| `dynamic_migration.sh` | Copies `isfdb` into `isfdb_innodb`, every table InnoDB |
+| `analyze_innodb.sh` | Runs `ANALYZE TABLE` on the InnoDB tables of one database (updates index statistics) |
+| `optimize_innodb.sh` | Runs `OPTIMIZE TABLE` on the InnoDB tables of one database (rebuild and analyze) |
+| `mysql_innodb_lib.sh` | Shared functions, sourced by the scripts above |
 
-## Prerequisites
+## Requirements
 
 - MySQL 9.7. Other versions are not tested. MariaDB is not supported
 - `mysql` client; `mysql_config_editor` only when you use a login-path
 - Bash 4.0+
+- A MySQL user that can create and drop databases and set `sql_log_bin` (`SYSTEM_VARIABLES_ADMIN` or
+  `SESSION_VARIABLES_ADMIN`). Root can
+- Disk for `isfdb`, `isfdb_innodb` and, during a run, the new copy in `isfdb_innodb_next`
 
 ## Setup
 
-Configure a MySQL login-path for secure credential storage:
+Store credentials in a login-path:
 
 ```bash
-mysql_config_editor set --login-path=local --user=root --password
-```
-
-For production:
-
-```bash
-mysql_config_editor set --login-path=production --user=isfdb --password
-```
-
-Verify your login-path:
-
-```bash
+mysql_config_editor set --login-path=isfdb_local --user=root --password
 mysql_config_editor print --all
 ```
+
+Or skip the login-path and pass `--user` or `--defaults-extra-file`.
 
 ## Options
 
@@ -51,66 +74,117 @@ All scripts take these options:
 | `--target DB` | `dynamic_migration.sh` only: database the copy replaces (default `isfdb_innodb`) |
 | `--database DB` | `analyze_innodb.sh` and `optimize_innodb.sh` only: database to work on (default `isfdb_innodb`) |
 
-Database names must match `[A-Za-z0-9_]+`. `--source` and `--target` must differ, and the copy also uses `<target>_next` and `<target>_old`.
-
-`--user` and `--defaults-extra-file` replace the login-path (giving both is an error), so `mysql_config_editor` is not needed.
+`--user` and `--defaults-extra-file` replace the login-path. Giving both is an error.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
-Without `--yes`, the scripts prompt as usual. With `--yes` a missing login-path is an error instead of a setup prompt.
-The scripts exit non-zero if the connection fails or a table cannot be copied, analyzed or verified.
+Without `--yes` the scripts prompt. With `--yes` a missing login-path is an error instead of a setup prompt.
 
-## Usage
+Database names must match `[A-Za-z0-9_]+`. `--source` and `--target` must differ. The copy also uses
+`<target>_next` and `<target>_old`. Neither may equal the source, and both must fit MySQL's 64-character
+limit. The script checks the names before it connects.
 
-### Copy into InnoDB
+## Copy into InnoDB
 
 ```bash
-./dynamic_migration.sh [login-path]
+./dynamic_migration.sh [--yes] [--user NAME | --defaults-extra-file FILE | login-path] [--source DB] [--target DB]
 ```
 
-The script copies the database `isfdb` into `isfdb_innodb`:
-- Builds the copy in `isfdb_innodb_next`: per table `CREATE TABLE ... LIKE`, `ALTER TABLE ... ENGINE = InnoDB` on the empty table, then `INSERT ... SELECT`
-- Copies every value unchanged, zero and partial dates (`0000-00-00`, `1990-05-00`) included
-- Keeps FULLTEXT indexes
-- Analyzes the copied tables (updates index statistics)
-- Verifies the copy before the swap: same tables, all InnoDB, same row counts, the same number of zero and partial dates per date column, and `pubs.pub_year` still has partial dates
-- Replaces `isfdb_innodb` with one atomic `RENAME TABLE`. A failed run leaves the previous `isfdb_innodb` as it was
-- Never changes `isfdb`
+A run:
 
-The copy keeps its writes out of the binary log (`SET SESSION sql_log_bin = 0`). The MySQL user needs
-`SYSTEM_VARIABLES_ADMIN` or `SESSION_VARIABLES_ADMIN` for that.
+1. Lists the tables of the source, whatever their engine, and asks for confirmation unless `--yes`.
+   A source that is missing or has no tables exits 1 before anything is created.
+2. Drops and recreates `<target>_next`. This also clears what an earlier failed run left there.
+3. Copies each table into `<target>_next`: `CREATE TABLE ... LIKE`, `ALTER TABLE ... ENGINE = InnoDB` on
+   the empty table, then `INSERT ... SELECT`. Keys, FULLTEXT indexes and `AUTO_INCREMENT` columns carry
+   over. Tables that are InnoDB already are copied the same way.
+4. Runs `ANALYZE TABLE` on every copied table.
+5. Verifies the copy.
+6. Swaps the copy in with one `RENAME TABLE`, then drops `<target>_old` and `<target>_next`.
 
-### Analysis
+### Session settings
+
+The script sets these in its own sessions. The server configuration needs no change for the copy.
+
+- `sql_mode = 'NO_ENGINE_SUBSTITUTION'` while copying. ISFDB stores unknown dates as zero dates:
+  `0000-00-00` for unknown, `1990-00-00` for a known year, `1990-05-00` for a known month. MySQL's
+  default strict mode (`NO_ZERO_DATE`, `NO_ZERO_IN_DATE`) rejects them. With this mode they copy unchanged.
+- `sql_log_bin = 0` in every session that writes, and `ANALYZE NO_WRITE_TO_BINLOG`. The copy is rebuilt
+  from the dump and never replicated, so it stays out of the binary log. This needs the privilege named
+  under Requirements.
+
+Importing the dump into `isfdb` needs the same `sql_mode` on the server, for the same dates. That is the
+importer's job. isbn-bff sets it in `infra/isfdb/isfdb.cnf`.
+
+### Verification
+
+Before the swap the script checks `<target>_next` against the source:
+
+- the same tables, by name;
+- every table InnoDB;
+- the same row count per table, by `COUNT(*)`, because `TABLE_ROWS` is only an estimate for InnoDB;
+- per `date`, `datetime` and `timestamp` column, the same number of values with a zero year, month or day;
+- `pubs.pub_year` still has values with an unknown day (`YYYY-MM-00`). None means the source went
+  through a date rewrite.
+
+Any failed check exits 1. The last check is written for the ISFDB schema, so it fails on a source
+without a `pubs` table.
+
+### Atomic swap
+
+The tables of `<target>` move to `<target>_old` and the tables of `<target>_next` move to `<target>`
+in one multi-table `RENAME TABLE`. That statement is atomic. Readers of `<target>` see the old tables or
+the new ones, never a mix. `<target>` ends up with exactly the copied tables. Both helper databases are
+dropped after the swap. The target is created first when it does not exist.
+
+### Failure behaviour
+
+| Exit code | When |
+|-----------|------|
+| 0 | The copy is in `<target>`. Also when you answer no at the prompt, and then nothing changes |
+| 1 | Invalid options or names, failed connection, missing source, failed table, failed `ANALYZE`, failed verification or failed swap |
+
+Every failure before the swap leaves `<target>` as the last good run left it, or absent. Only
+`<target>_next` may stay behind, and the next run drops it first.
+
+A failed `RENAME TABLE` changes nothing. The script then drops `<target>_old` if it is empty, and drops
+`<target>` if this run created it and it is still empty.
+
+A table that fails to copy is reported and the other tables are still copied. The run lists all failing
+tables, then exits 1 without analyzing or swapping.
+
+Callers must stop on exit code 1. After a failed run `<target>` may still hold an older dump.
+
+## Maintenance helpers
 
 ```bash
-./analyze_innodb.sh [login-path]
+./analyze_innodb.sh [--database DB] [login-path]
+./optimize_innodb.sh [--database DB] [login-path]
 ```
 
-The analysis script:
-- Finds all InnoDB tables of `isfdb_innodb` (or `--database DB`)
-- Runs `ANALYZE TABLE` on each (updates index statistics for query optimizer)
-- Shows detailed size information (data/index breakdown)
+Both find the InnoDB tables of `isfdb_innodb` (or `--database DB`), run `ANALYZE TABLE` or
+`OPTIMIZE TABLE` on each and show data and index sizes. `isfdb` stays MyISAM, so the default is the copy.
+The pipeline does not call them.
 
-### Examples
+## Examples
 
 ```bash
-# Use default 'local' login-path
+# Default login-path isfdb_local, copies isfdb into isfdb_innodb
 ./dynamic_migration.sh
 
-# Use a specific login-path
-./dynamic_migration.sh production
-./analyze_innodb.sh production
+# Another login-path and target
+./dynamic_migration.sh --target isfdb_innodb_test production
 
-# Analyze the original database instead of the copy
-./analyze_innodb.sh --database isfdb production
+# Analyze another database than the default
+./analyze_innodb.sh --database isfdb_innodb_test production
 ```
 
-### Unattended (e.g. inside the `mysql` Docker image)
+Unattended, inside the `mysql` Docker image:
 
 ```bash
 docker compose exec -T isfdb sh -c \
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" /isfdb-engine-migration/dynamic_migration.sh --yes --user root'
 ```
 
-Or with a credentials file:
+With a credentials file:
 
 ```bash
 ./dynamic_migration.sh --yes --defaults-extra-file /run/secrets/isfdb.cnf
@@ -123,4 +197,4 @@ test/run.sh
 ```
 
 Runs the scripts against a throwaway `mysql:9.7` container with a small ISFDB fixture (`test/fixture.sql`).
-Needs Docker. The container publishes no port.
+Needs Docker and the `mysql:9.7` image. The container publishes no host port.
