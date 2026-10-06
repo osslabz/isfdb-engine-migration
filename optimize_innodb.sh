@@ -12,8 +12,9 @@
 #   ./optimize_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--database DB] [login-path-name]
 #
 # Examples:
-#   ./optimize_innodb.sh              # Uses 'local' login-path
+#   ./optimize_innodb.sh              # Uses 'isfdb_local' login-path
 #   ./optimize_innodb.sh production   # Uses 'production' login-path
+#   ./optimize_innodb.sh --database isfdb_innodb_test   # Works on another database
 #
 # =====================================================
 

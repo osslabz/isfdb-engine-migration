@@ -14,6 +14,7 @@
 # Examples:
 #   ./analyze_innodb.sh              # Uses 'isfdb_local' login-path
 #   ./analyze_innodb.sh production   # Uses 'production' login-path
+#   ./analyze_innodb.sh --database isfdb_innodb_test   # Works on another database
 #
 # =====================================================
 

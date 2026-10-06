@@ -154,8 +154,8 @@ Callers must stop on exit code 1. After a failed run `<target>` may still hold a
 ## Maintenance helpers
 
 ```bash
-./analyze_innodb.sh [--database DB] [login-path]
-./optimize_innodb.sh [--database DB] [login-path]
+./analyze_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--database DB] [login-path]
+./optimize_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--database DB] [login-path]
 ```
 
 Both find the InnoDB tables of `isfdb_innodb` (or `--database DB`), run `ANALYZE TABLE` or
