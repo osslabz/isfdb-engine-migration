@@ -140,13 +140,17 @@ assert_no_database() {
 }
 
 assert_log_contains() {
-    if ! grep -F -- "$1" <(log_text) > /dev/null; then
+    local text
+    text=$(log_text) || { fail "cannot read the output"; return; }
+    if ! grep -F -- "$1" <<< "$text" > /dev/null; then
         fail "output lacks [$1]"
     fi
 }
 
 assert_log_lacks() {
-    if grep -F -- "$1" <(log_text) > /dev/null; then
+    local text
+    text=$(log_text) || { fail "cannot read the output"; return; }
+    if grep -F -- "$1" <<< "$text" > /dev/null; then
         fail "output contains [$1]"
     fi
 }
