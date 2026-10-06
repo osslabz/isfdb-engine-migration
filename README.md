@@ -55,7 +55,7 @@ Database names must match `[A-Za-z0-9_]+`. `--source` and `--target` must differ
 `--user` and `--defaults-extra-file` replace the login-path (giving both is an error), so `mysql_config_editor` is not needed.
 The `mysql` client also reads `MYSQL_PWD`, `MYSQL_HOST` and `MYSQL_TCP_PORT` from the environment.
 Without `--yes`, the scripts prompt as usual. With `--yes` a missing login-path is an error instead of a setup prompt.
-The scripts exit non-zero if the connection fails or a table cannot be copied or analyzed.
+The scripts exit non-zero if the connection fails or a table cannot be copied, analyzed or verified.
 
 ## Usage
 
@@ -70,6 +70,7 @@ The script copies the database `isfdb` into `isfdb_innodb`:
 - Copies every value unchanged, zero and partial dates (`0000-00-00`, `1990-05-00`) included
 - Keeps FULLTEXT indexes
 - Analyzes the copied tables (updates index statistics)
+- Verifies the copy before the swap: same tables, all InnoDB, same row counts, the same number of zero and partial dates per date column, and `pubs.pub_year` still has partial dates
 - Replaces `isfdb_innodb` with one atomic `RENAME TABLE`. A failed run leaves the previous `isfdb_innodb` as it was
 - Never changes `isfdb`
 

@@ -371,6 +371,22 @@ get_date_columns() {
     " 2>&1
 }
 
+# Count values whose date part has a zero year, month or day (0000-00-00, 1990-00-00, 1990-05-00)
+# The first 10 characters are the date part of date, datetime and timestamp values alike.
+# Args: $1 = mysql command, $2 = database name, $3 = table name, $4 = column name
+count_zero_dates() {
+    local mysql_cmd="$1"
+    local db_name="$2"
+    local table_name="$3"
+    local column_name="$4"
+
+    ${mysql_cmd} -D "${db_name}" -s -N -e "
+        SELECT COUNT(*)
+        FROM \`${table_name}\`
+        WHERE LEFT(CAST(\`${column_name}\` AS CHAR), 10) REGEXP '^0000|-00';
+    " 2>&1
+}
+
 # =====================================================
 # TABLE OPERATIONS
 # =====================================================

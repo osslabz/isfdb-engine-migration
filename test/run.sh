@@ -394,6 +394,96 @@ test_unknown_option() {
 }
 
 # =====================================================
+# Tests: verification
+# =====================================================
+
+# Call verify_copy from the sourced script; output goes to the test's log
+# Args: $1 = source database, $2 = copy database
+# Returns: verify_copy's exit code
+run_verify() {
+    docker exec -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" bash -c \
+        'source /isfdb-engine-migration/dynamic_migration.sh && verify_copy "mysql --user=root" "$1" "$2"' \
+        _ "$1" "$2" >> "$(log_file)" 2>&1
+}
+
+test_rewritten_source_keeps_old_target() {
+    run_migration
+    assert_eq "first exit code" 0 "$?"
+    local target_before
+    target_before=$(checksums isfdb_innodb)
+    load_fixture_as isfdb_rewritten
+    sql -e "UPDATE isfdb_rewritten.pubs SET pub_year = NULL WHERE CAST(pub_year AS CHAR) LIKE '%-00'"
+
+    run_migration --source isfdb_rewritten
+    assert_eq "second exit code" 1 "$?"
+    assert_log_contains "isfdb_innodb_next.pubs.pub_year has no partial date"
+    assert_eq "isfdb_innodb checksums" "$target_before" "$(checksums isfdb_innodb)"
+    assert_no_database isfdb_innodb_old
+}
+
+test_verify_accepts_exact_copy() {
+    run_migration --target good_copy
+    run_verify isfdb good_copy
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "good_copy.pubs.pub_year keeps 4 partial dates"
+}
+
+test_verify_reports_missing_table() {
+    run_migration --target bad_copy
+    sql -e "DROP TABLE bad_copy.authors"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "only in isfdb: authors"
+}
+
+test_verify_reports_extra_table() {
+    run_migration --target bad_copy
+    sql -e "CREATE TABLE bad_copy.extra (id int) ENGINE = InnoDB"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "only in bad_copy: extra"
+}
+
+test_verify_fails_when_listing_fails() {
+    run_verify isfdb no_such_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Listing the tables of no_such_copy failed: ERROR 1049 (42000): Unknown database 'no_such_copy'"
+}
+
+test_verify_reports_wrong_engine() {
+    run_migration --target bad_copy
+    sql -e "ALTER TABLE bad_copy.mw_user_groups ENGINE = MyISAM"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "Tables not InnoDB in bad_copy"
+    assert_log_contains "mw_user_groups"
+}
+
+test_verify_reports_row_count() {
+    run_migration --target bad_copy
+    sql -e "DELETE FROM bad_copy.titles WHERE title_id = 2"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "titles: 5 rows in isfdb, 4 in bad_copy"
+}
+
+test_verify_reports_changed_datetime_zero() {
+    run_migration --target bad_copy
+    sql -e "UPDATE bad_copy.submissions SET sub_time = '2001-01-01 00:00:00' WHERE sub_id = 1"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "submissions.sub_time: 1 zero or partial dates in isfdb, 0 in bad_copy"
+}
+
+test_verify_reports_changed_partial_date() {
+    run_migration --target bad_copy
+    sql -e "SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'; UPDATE bad_copy.authors SET author_birthdate = '1901-01-01' WHERE author_id = 2"
+    run_verify isfdb bad_copy
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "authors.author_birthdate: 1 zero or partial dates in isfdb, 0 in bad_copy"
+}
+
+# =====================================================
 # Runner
 # =====================================================
 

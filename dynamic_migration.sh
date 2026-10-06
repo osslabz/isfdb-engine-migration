@@ -192,6 +192,171 @@ analyze_copied_tables() {
     fi
 }
 
+# Count the rows of one table exactly; TABLE_ROWS is only an estimate for InnoDB
+# Args: $1 = mysql command, $2 = database name, $3 = table name
+count_rows() {
+    local mysql_cmd="$1"
+    local db_name="$2"
+    local table_name="$3"
+
+    ${mysql_cmd} -s -N -e "SELECT COUNT(*) FROM \`${db_name}\`.\`${table_name}\`;" 2>&1
+}
+
+# Args: $1 = mysql command, $2 = source database, $3 = copy database
+verify_table_names() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local copy_db="$3"
+
+    local source_tables copy_tables
+    source_tables=$(get_tables_by_engine "${mysql_cmd}" "${source_db}" "") || {
+        print_error "✗ Listing the tables of ${source_db} failed: ${source_tables}"
+        return 1
+    }
+    copy_tables=$(get_tables_by_engine "${mysql_cmd}" "${copy_db}" "") || {
+        print_error "✗ Listing the tables of ${copy_db} failed: ${copy_tables}"
+        return 1
+    }
+    source_tables=$(echo "$source_tables" | sort)
+    copy_tables=$(echo "$copy_tables" | sort)
+
+    if [ "$source_tables" != "$copy_tables" ]; then
+        print_error "✗ Tables differ between ${source_db} and ${copy_db}:"
+        comm -23 <(echo "$source_tables") <(echo "$copy_tables") | sed "s/^/  only in ${source_db}: /"
+        comm -13 <(echo "$source_tables") <(echo "$copy_tables") | sed "s/^/  only in ${copy_db}: /"
+        return 1
+    fi
+    print_info "✓ Same $(echo "$source_tables" | wc -l) tables"
+}
+
+# Args: $1 = mysql command, $2 = copy database
+verify_engines() {
+    local mysql_cmd="$1"
+    local copy_db="$2"
+
+    local not_innodb
+    not_innodb=$(${mysql_cmd} -s -N -e "
+        SELECT TABLE_NAME, ENGINE
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = '${copy_db}'
+        AND TABLE_TYPE = 'BASE TABLE'
+        AND ENGINE <> 'InnoDB'
+        ORDER BY TABLE_NAME;
+    " 2>&1) || {
+        print_error "✗ Listing the engines of ${copy_db} failed: ${not_innodb}"
+        return 1
+    }
+    if [ -n "$not_innodb" ]; then
+        print_error "✗ Tables not InnoDB in ${copy_db}:"
+        echo "$not_innodb" | sed 's/^/  /'
+        return 1
+    fi
+    print_info "✓ All tables InnoDB"
+}
+
+# Args: $1 = mysql command, $2 = source database, $3 = copy database, $4 = table list (newline-separated)
+verify_row_counts() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local copy_db="$3"
+    local tables="$4"
+
+    local failed=0
+    local source_count copy_count
+    while IFS= read -r table; do
+        source_count=$(count_rows "${mysql_cmd}" "${source_db}" "${table}") &&
+            copy_count=$(count_rows "${mysql_cmd}" "${copy_db}" "${table}") || {
+            print_error "✗ Counting the rows of ${table} failed: ${source_count} ${copy_count}"
+            failed=1
+            continue
+        }
+        if [ "$source_count" != "$copy_count" ]; then
+            print_error "✗ ${table}: ${source_count} rows in ${source_db}, ${copy_count} in ${copy_db}"
+            failed=1
+        fi
+    done <<< "$tables"
+
+    [ $failed -eq 0 ] && print_info "✓ Row counts match"
+    return $failed
+}
+
+# Compare the number of zero and partial dates per date, datetime and timestamp column
+# Args: $1 = mysql command, $2 = source database, $3 = copy database, $4 = table list (newline-separated)
+verify_zero_dates() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local copy_db="$3"
+    local tables="$4"
+
+    local failed=0
+    local columns source_count copy_count
+    while IFS= read -r table; do
+        columns=$(get_date_columns "${mysql_cmd}" "${source_db}" "${table}") || {
+            print_error "✗ Listing the date columns of ${table} failed: ${columns}"
+            failed=1
+            continue
+        }
+        [ -z "$columns" ] && continue
+        while IFS= read -r column; do
+            source_count=$(count_zero_dates "${mysql_cmd}" "${source_db}" "${table}" "${column}") &&
+                copy_count=$(count_zero_dates "${mysql_cmd}" "${copy_db}" "${table}" "${column}") || {
+                print_error "✗ Counting the zero dates of ${table}.${column} failed: ${source_count} ${copy_count}"
+                failed=1
+                continue
+            }
+            if [ "$source_count" != "$copy_count" ]; then
+                print_error "✗ ${table}.${column}: ${source_count} zero or partial dates in ${source_db}, ${copy_count} in ${copy_db}"
+                failed=1
+            fi
+        done <<< "$columns"
+    done <<< "$tables"
+
+    [ $failed -eq 0 ] && print_info "✓ Zero and partial date counts match"
+    return $failed
+}
+
+# Spot check: the 2025-11-15 dump has 346,049 pubs with an unknown day.
+# None means the source already went through a date rewrite.
+# Args: $1 = mysql command, $2 = copy database
+verify_partial_dates_kept() {
+    local mysql_cmd="$1"
+    local copy_db="$2"
+
+    local partial
+    partial=$(${mysql_cmd} -s -N -e "
+        SELECT COUNT(*) FROM \`${copy_db}\`.pubs WHERE CAST(pub_year AS CHAR) LIKE '%-00';
+    " 2>&1) || {
+        print_error "✗ Counting the partial dates of ${copy_db}.pubs failed: ${partial}"
+        return 1
+    }
+    if [ "$partial" -eq 0 ]; then
+        print_error "✗ ${copy_db}.pubs.pub_year has no partial date (YYYY-MM-00); the source looks rewritten"
+        return 1
+    fi
+    print_info "✓ ${copy_db}.pubs.pub_year keeps ${partial} partial dates"
+}
+
+# Compare the copy with its source; the checks after the table names need the same tables
+# Args: $1 = mysql command, $2 = source database, $3 = copy database
+# Returns: 1 if any check fails
+verify_copy() {
+    local mysql_cmd="$1"
+    local source_db="$2"
+    local copy_db="$3"
+
+    print_header "Verifying ${copy_db}"
+    verify_table_names "${mysql_cmd}" "${source_db}" "${copy_db}" || return 1
+
+    local tables
+    tables=$(get_tables_by_engine "${mysql_cmd}" "${source_db}" "")
+    local failed=0
+    verify_engines "${mysql_cmd}" "${copy_db}" || failed=1
+    verify_row_counts "${mysql_cmd}" "${source_db}" "${copy_db}" "${tables}" || failed=1
+    verify_zero_dates "${mysql_cmd}" "${source_db}" "${copy_db}" "${tables}" || failed=1
+    verify_partial_dates_kept "${mysql_cmd}" "${copy_db}" || failed=1
+    return $failed
+}
+
 # Move the scratch tables into the target with one atomic RENAME TABLE
 # The tables the target holds now move to the old-target database, which is dropped afterwards,
 # so the target ends up with exactly the scratch tables.
@@ -344,6 +509,9 @@ main() {
     analyze_copied_tables "${MYSQL_CMD}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
 
     echo ""
+    verify_copy "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" || exit 1
+
+    echo ""
     print_header "Replacing ${TARGET_DB}"
     swap_into_target "${MYSQL_CMD}" "${SCRATCH_DB}" "${TARGET_DB}" "${OLD_TARGET_DB}" || {
         print_error "Failed to move the copy into ${TARGET_DB}"
@@ -361,5 +529,7 @@ main() {
     echo ""
 }
 
-# Run main
-main "$@"
+# Tests source this file to call single functions
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi
