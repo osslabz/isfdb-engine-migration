@@ -13,8 +13,8 @@ Copies the Internet Speculative Fiction Database (ISFDB) into InnoDB tables, plu
 
 ## Prerequisites
 
-- MySQL 5.6+ or MariaDB 10.0+
-- `mysql` or `mariadb` client; `mysql_config_editor` (MySQL only) only when you use a login-path
+- MySQL 9.7. Other versions are not tested. MariaDB is not supported
+- `mysql` client; `mysql_config_editor` only when you use a login-path
 - Bash 4.0+
 
 ## Setup

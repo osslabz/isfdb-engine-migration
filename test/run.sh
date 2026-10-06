@@ -339,6 +339,17 @@ test_helpers_reject_invalid_database() {
     assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
 }
 
+test_mariadb_client_is_not_used() {
+    docker exec "$CONTAINER" bash -c \
+        'mkdir -p /tmp/mariadb-only && for f in /usr/bin/*; do [ "${f##*/}" = mysql ] || ln -sf "$f" /tmp/mariadb-only/; done && ln -sf /usr/bin/mysql /tmp/mariadb-only/mariadb'
+    docker exec -e MYSQL_PWD="$ROOT_PASSWORD" -e PATH=/tmp/mariadb-only "$CONTAINER" \
+        /isfdb-engine-migration/dynamic_migration.sh --yes --user root >> "$(log_file)" 2>&1
+    assert_eq "exit code" 1 "$?"
+    assert_log_contains "mysql client not found!"
+    assert_no_database isfdb_innodb_next
+    assert_no_database isfdb_innodb
+}
+
 test_missing_privilege_changes_nothing() {
     sql -e "CREATE USER copier IDENTIFIED BY 'copier_pwd'; GRANT ALL ON *.* TO copier; REVOKE SYSTEM_VARIABLES_ADMIN, SESSION_VARIABLES_ADMIN, SUPER ON *.* FROM copier"
 
