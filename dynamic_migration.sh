@@ -202,17 +202,14 @@ count_rows() {
     ${mysql_cmd} -s -N -e "SELECT COUNT(*) FROM \`${db_name}\`.\`${table_name}\`;" 2>&1
 }
 
-# Args: $1 = mysql command, $2 = source database, $3 = copy database
+# Args: $1 = mysql command, $2 = source database, $3 = copy database, $4 = source table list (newline-separated)
 verify_table_names() {
     local mysql_cmd="$1"
     local source_db="$2"
     local copy_db="$3"
+    local source_tables="$4"
 
-    local source_tables copy_tables
-    source_tables=$(get_tables_by_engine "${mysql_cmd}" "${source_db}" "") || {
-        print_error "✗ Listing the tables of ${source_db} failed: ${source_tables}"
-        return 1
-    }
+    local copy_tables
     copy_tables=$(get_tables_by_engine "${mysql_cmd}" "${copy_db}" "") || {
         print_error "✗ Listing the tables of ${copy_db} failed: ${copy_tables}"
         return 1
@@ -337,18 +334,17 @@ verify_partial_dates_kept() {
 }
 
 # Compare the copy with its source; the checks after the table names need the same tables
-# Args: $1 = mysql command, $2 = source database, $3 = copy database
+# Args: $1 = mysql command, $2 = source database, $3 = copy database, $4 = source table list (newline-separated)
 # Returns: 1 if any check fails
 verify_copy() {
     local mysql_cmd="$1"
     local source_db="$2"
     local copy_db="$3"
+    local tables="$4"
 
     print_header "Verifying ${copy_db}"
-    verify_table_names "${mysql_cmd}" "${source_db}" "${copy_db}" || return 1
+    verify_table_names "${mysql_cmd}" "${source_db}" "${copy_db}" "${tables}" || return 1
 
-    local tables
-    tables=$(get_tables_by_engine "${mysql_cmd}" "${source_db}" "")
     local failed=0
     verify_engines "${mysql_cmd}" "${copy_db}" || failed=1
     verify_row_counts "${mysql_cmd}" "${source_db}" "${copy_db}" "${tables}" || failed=1
@@ -511,7 +507,7 @@ main() {
     analyze_copied_tables "${MYSQL_CMD}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
 
     echo ""
-    verify_copy "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" || exit 1
+    verify_copy "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1
 
     echo ""
     print_header "Replacing ${TARGET_DB}"

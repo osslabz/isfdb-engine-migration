@@ -547,7 +547,7 @@ test_verify_reports_missing_table() {
 
 test_verify_counts_no_tables() {
     sql -e "CREATE DATABASE empty_source; CREATE DATABASE empty_copy"
-    call_function verify_table_names empty_source empty_copy
+    call_function verify_table_names empty_source empty_copy ""
     assert_eq "exit code" 0 "$?"
     assert_log_contains "[INFO] ✓ Same 0 tables"
 }
