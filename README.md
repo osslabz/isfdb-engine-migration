@@ -133,13 +133,17 @@ dropped after the swap. The target is created first when it does not exist.
 | Exit code | When |
 |-----------|------|
 | 0 | The copy is in `<target>`. Also when you answer no at the prompt, and then nothing changes |
-| 1 | Invalid options or names, failed connection, missing source, failed table, failed `ANALYZE`, failed verification or failed swap |
+| 1 | Invalid options or names, failed connection, missing or empty source, failed preparation of `<target>_next`, failed table, failed `ANALYZE`, failed verification, failed swap before or at the `RENAME TABLE`, or failed drop of a helper database after a successful `RENAME TABLE` |
 
 Every failure before the swap leaves `<target>` as the last good run left it, or absent. Only
 `<target>_next` may stay behind, and the next run drops it first.
 
-A failed `RENAME TABLE` changes nothing. The script then drops `<target>_old` if it is empty, and drops
-`<target>` if this run created it and it is still empty.
+A failed `RENAME TABLE` changes nothing. The script then drops `<target>_old`, and drops `<target>` if
+this run created it.
+
+If a helper database cannot be dropped after a successful `RENAME TABLE`, `<target>` already holds the new
+copy. The script says so and exits 1. The next run drops `<target>_next` before the copy and `<target>_old`
+at the swap.
 
 A table that fails to copy is reported and the other tables are still copied. The run lists all failing
 tables, then exits 1 without analyzing or swapping.
