@@ -4,14 +4,14 @@
 # =====================================================
 #
 # This script:
-# - Finds all InnoDB tables in a database
+# - Finds all InnoDB tables in a database (default isfdb_innodb)
 # - Optimizes them
 # - Shows detailed size information
 # - Analyzes InnoDB buffer pool configuration
 # - Provides recommendations for optimal settings
 #
 # Usage:
-#   ./optimize_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [login-path-name]
+#   ./optimize_innodb.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--database DB] [login-path-name]
 #
 # Examples:
 #   ./optimize_innodb.sh              # Uses 'local' login-path
@@ -34,7 +34,10 @@ fi
 # CONFIGURATION
 # =====================================================
 
-DB_NAME="isfdb"
+# isfdb stays MyISAM; the InnoDB tables are in the copy
+DB_NAME="isfdb_innodb"
+OPTION_VARIABLES["--database"]=DB_NAME
+SCRIPT_USAGE_OPTIONS="[--database DB]"
 
 # =====================================================
 # MAIN SCRIPT
@@ -42,6 +45,7 @@ DB_NAME="isfdb"
 
 main() {
     parse_connection_args "$@" || exit 1
+    validate_database_name "--database" "${DB_NAME}" || exit 1
     connect_mysql || exit 1
 
     # Discover InnoDB tables

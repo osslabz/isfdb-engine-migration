@@ -49,6 +49,7 @@ All scripts take these options:
 | `--defaults-extra-file FILE` | Read credentials from a MySQL option file instead of using a login-path (path without spaces) |
 | `--source DB` | `dynamic_migration.sh` only: database to copy (default `isfdb`) |
 | `--target DB` | `dynamic_migration.sh` only: database the copy replaces (default `isfdb_innodb`) |
+| `--database DB` | `analyze_innodb.sh` and `optimize_innodb.sh` only: database to work on (default `isfdb_innodb`) |
 
 Database names must match `[A-Za-z0-9_]+`. `--source` and `--target` must differ, and the copy also uses `<target>_next` and `<target>_old`.
 
@@ -84,7 +85,7 @@ The copy keeps its writes out of the binary log (`SET SESSION sql_log_bin = 0`).
 ```
 
 The analysis script:
-- Finds all InnoDB tables
+- Finds all InnoDB tables of `isfdb_innodb` (or `--database DB`)
 - Runs `ANALYZE TABLE` on each (updates index statistics for query optimizer)
 - Shows detailed size information (data/index breakdown)
 - Analyzes InnoDB buffer pool configuration
@@ -99,6 +100,9 @@ The analysis script:
 # Use a specific login-path
 ./dynamic_migration.sh production
 ./analyze_innodb.sh production
+
+# Analyze the original database instead of the copy
+./analyze_innodb.sh --database isfdb production
 ```
 
 ### Unattended (e.g. inside the `mysql` Docker image)

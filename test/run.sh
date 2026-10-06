@@ -281,21 +281,51 @@ test_failed_first_rename_leaves_no_empty_target() {
 }
 
 test_analyze_fails_without_database() {
-    sql -e "DROP DATABASE isfdb"
-
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb'"
+    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
     assert_log_lacks "No InnoDB tables found"
 }
 
 test_optimize_fails_without_database() {
-    sql -e "DROP DATABASE isfdb"
-
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb'"
+    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
     assert_log_lacks "No InnoDB tables found"
+}
+
+test_analyze_defaults_to_innodb_copy() {
+    run_migration
+    run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "Found 5 InnoDB tables"
+}
+
+test_analyze_takes_database() {
+    run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database isfdb
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "Found 1 InnoDB tables"
+}
+
+test_optimize_defaults_to_innodb_copy() {
+    run_migration
+    run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "Found 5 InnoDB tables"
+}
+
+test_optimize_takes_database() {
+    run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes --database isfdb
+    assert_eq "exit code" 0 "$?"
+    assert_log_contains "Found 1 InnoDB tables"
+}
+
+test_helpers_reject_invalid_database() {
+    run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database 'bad-name'
+    assert_eq "analyze exit code" 1 "$?"
+    run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes --database 'bad-name'
+    assert_eq "optimize exit code" 1 "$?"
+    assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
 }
 
 test_missing_privilege_changes_nothing() {
