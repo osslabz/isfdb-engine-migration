@@ -264,8 +264,9 @@ test_failed_table_keeps_old_target() {
 
     run_migration
     assert_eq "second exit code" 1 "$?"
-    assert_log_contains "Failed to copy wide"
-    assert_log_contains "Too many columns"
+    assert_log_contains "[ERROR] ✗ Failed to copy wide"
+    assert_log_contains "    ERROR 1117 (HY000) at line 5: Too many columns"
+    assert_log_contains "[ERROR] Failed tables:"
     assert_eq "isfdb_innodb checksums" "$target_before" "$(checksums isfdb_innodb)"
     assert_no_database isfdb_innodb_old
     assert_eq "other tables copied after the failure" \
@@ -278,8 +279,7 @@ test_failed_rename_leaves_no_empty_old_database() {
 
     run_migration
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "already exists"
-    assert_log_contains "Failed to move the copy into isfdb_innodb"
+    assert_log_contains "[ERROR] Failed to move the copy into isfdb_innodb: ERROR 1050 (42S01) at line 6: Table 'pubs' already exists"
     assert_no_database isfdb_innodb_old
     assert_database_exists isfdb_innodb_next
     assert_eq "isfdb_innodb tables" "pubs" "$(engines isfdb_innodb | cut -f1)"
@@ -311,7 +311,7 @@ test_failed_first_rename_leaves_no_empty_target() {
 
     run_script_as copier copier_pwd dynamic_migration.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Failed to move the copy into isfdb_innodb"
+    assert_log_contains "[ERROR] Failed to move the copy into isfdb_innodb: ERROR 1142 (42000) at line 6: INSERT command denied to user 'copier'@'localhost' for table 'submissions'"
     assert_no_database isfdb_innodb
     assert_no_database isfdb_innodb_old
     assert_database_exists isfdb_innodb_next
@@ -323,7 +323,7 @@ test_mariadb_client_is_not_used() {
     docker exec -e MYSQL_PWD="$ROOT_PASSWORD" -e PATH=/tmp/mariadb-only "$CONTAINER" \
         /isfdb-engine-migration/dynamic_migration.sh --yes --user root >> "$(log_file)" 2>&1
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "mysql client not found!"
+    assert_log_contains "[ERROR] mysql client not found!"
     assert_no_database isfdb_innodb_next
     assert_no_database isfdb_innodb
 }
@@ -333,7 +333,8 @@ test_missing_privilege_changes_nothing() {
 
     run_script_as copier copier_pwd dynamic_migration.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "SESSION_VARIABLES_ADMIN"
+    assert_log_contains "ERROR 1227 (42000) at line 2: Access denied; you need (at least one of) the SUPER, SYSTEM_VARIABLES_ADMIN or SESSION_VARIABLES_ADMIN privilege(s) for this operation"
+    assert_log_contains "[ERROR] Failed to prepare isfdb_innodb_next"
     assert_no_database isfdb_innodb_next
     assert_no_database isfdb_innodb
 }
@@ -342,7 +343,7 @@ test_declined_prompt_changes_nothing() {
     printf 'no\n' | docker exec -i -e MYSQL_PWD="$ROOT_PASSWORD" "$CONTAINER" \
         /isfdb-engine-migration/dynamic_migration.sh --user root >> "$(log_file)" 2>&1
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "Copy cancelled"
+    assert_log_contains "[INFO] Copy cancelled"
     assert_no_database isfdb_innodb_next
     assert_no_database isfdb_innodb
 }
@@ -385,7 +386,7 @@ test_source_equals_target() {
     checksums_before=$(checksums isfdb)
     run_migration --source isfdb --target isfdb
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--source and --target must differ"
+    assert_log_contains "[ERROR] --source and --target must differ"
     assert_eq "isfdb checksums" "$checksums_before" "$(checksums isfdb)"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
@@ -393,7 +394,7 @@ test_source_equals_target() {
 test_invalid_database_name() {
     run_migration --target 'isfdb-innodb'
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--target must match [A-Za-z0-9_]+, got 'isfdb-innodb'"
+    assert_log_contains "[ERROR] --target must match [A-Za-z0-9_]+, got 'isfdb-innodb'"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
@@ -417,36 +418,36 @@ test_derived_name_over_length_limit() {
     target=$(name_of_length 60)
     run_migration --target "$target"
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--target is too long: ${target}_next exceeds 64 characters"
+    assert_log_contains "[ERROR] --target is too long: ${target}_next exceeds 64 characters"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
 test_scratch_name_equals_source() {
     run_migration --source isfdb_next --target isfdb
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--source must not be isfdb_next, the copy uses it for scratch"
+    assert_log_contains "[ERROR] --source must not be isfdb_next, the copy uses it for scratch"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
 test_old_target_name_equals_source() {
     run_migration --source isfdb_old --target isfdb
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--source must not be isfdb_old, the copy uses it for scratch"
+    assert_log_contains "[ERROR] --source must not be isfdb_old, the copy uses it for scratch"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
 test_option_without_value() {
     run_migration --target
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Option --target needs a value"
+    assert_log_contains "[ERROR] Option --target needs a value"
     assert_eq "databases" "isfdb" "$(user_databases)"
 }
 
 test_unknown_option() {
     run_migration --database isfdb
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Unknown option: --database"
-    assert_log_contains "[--source DB] [--target DB]"
+    assert_log_contains "[ERROR] Unknown option: --database"
+    assert_log_contains "Usage: dynamic_migration.sh [--yes] [--user NAME] [--defaults-extra-file FILE] [--source DB] [--target DB] [login-path]"
 }
 
 # =====================================================
@@ -456,14 +457,14 @@ test_unknown_option() {
 test_analyze_fails_without_database() {
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
+    assert_log_contains "[ERROR] Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
     assert_log_lacks "No InnoDB tables found"
 }
 
 test_optimize_fails_without_database() {
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
+    assert_log_contains "[ERROR] Failed to query database: ERROR 1049 (42000): Unknown database 'isfdb_innodb'"
     assert_log_lacks "No InnoDB tables found"
 }
 
@@ -472,13 +473,13 @@ test_analyze_defaults_to_innodb_copy() {
     assert_eq "migration exit code" 0 "$?"
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "Found 5 InnoDB tables"
+    assert_log_contains "[INFO] Found 5 InnoDB tables"
 }
 
 test_analyze_takes_database() {
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database isfdb
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "Found 1 InnoDB tables"
+    assert_log_contains "[INFO] Found 1 InnoDB tables"
 }
 
 test_optimize_defaults_to_innodb_copy() {
@@ -486,13 +487,13 @@ test_optimize_defaults_to_innodb_copy() {
     assert_eq "migration exit code" 0 "$?"
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "Found 5 InnoDB tables"
+    assert_log_contains "[INFO] Found 5 InnoDB tables"
 }
 
 test_optimize_takes_database() {
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes --database isfdb
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "Found 1 InnoDB tables"
+    assert_log_contains "[INFO] Found 1 InnoDB tables"
 }
 
 test_helpers_print_no_buffer_pool_advice() {
@@ -510,13 +511,13 @@ test_helpers_print_no_buffer_pool_advice() {
 test_analyze_rejects_invalid_database() {
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes --database 'bad-name'
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
+    assert_log_contains "[ERROR] --database must match [A-Za-z0-9_]+, got 'bad-name'"
 }
 
 test_optimize_rejects_invalid_database() {
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes --database 'bad-name'
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "--database must match [A-Za-z0-9_]+, got 'bad-name'"
+    assert_log_contains "[ERROR] --database must match [A-Za-z0-9_]+, got 'bad-name'"
 }
 
 # =====================================================
@@ -556,7 +557,7 @@ test_rewritten_source_keeps_old_target() {
 
     run_migration --source isfdb_rewritten
     assert_eq "second exit code" 1 "$?"
-    assert_log_contains "isfdb_innodb_next.pubs.pub_year has no partial date"
+    assert_log_contains "[ERROR] ✗ isfdb_innodb_next.pubs.pub_year has no partial date (YYYY-MM-00); the source looks rewritten"
     assert_eq "isfdb_innodb checksums" "$target_before" "$(checksums isfdb_innodb)"
     assert_no_database isfdb_innodb_old
 }
@@ -566,7 +567,7 @@ test_verify_accepts_exact_copy() {
     assert_eq "migration exit code" 0 "$?"
     run_verify isfdb good_copy
     assert_eq "exit code" 0 "$?"
-    assert_log_contains "good_copy.pubs.pub_year keeps 4 partial dates"
+    assert_log_contains "[INFO] ✓ good_copy.pubs.pub_year keeps 4 partial dates"
 }
 
 test_verify_reports_missing_table() {
@@ -575,7 +576,8 @@ test_verify_reports_missing_table() {
     sql -e "DROP TABLE bad_copy.authors"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "only in isfdb: authors"
+    assert_log_contains "[ERROR] ✗ Tables differ between isfdb and bad_copy:"
+    assert_log_contains "  only in isfdb: authors"
 }
 
 test_verify_counts_no_tables() {
@@ -591,13 +593,14 @@ test_verify_reports_extra_table() {
     sql -e "CREATE TABLE bad_copy.extra (id int) ENGINE = InnoDB"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "only in bad_copy: extra"
+    assert_log_contains "[ERROR] ✗ Tables differ between isfdb and bad_copy:"
+    assert_log_contains "  only in bad_copy: extra"
 }
 
 test_verify_fails_when_listing_fails() {
     run_verify isfdb no_such_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Listing the tables of no_such_copy failed: ERROR 1049 (42000): Unknown database 'no_such_copy'"
+    assert_log_contains "[ERROR] ✗ Listing the tables of no_such_copy failed: ERROR 1049 (42000): Unknown database 'no_such_copy'"
 }
 
 test_verify_reports_wrong_engine() {
@@ -606,8 +609,8 @@ test_verify_reports_wrong_engine() {
     sql -e "ALTER TABLE bad_copy.mw_user_groups ENGINE = MyISAM"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "Tables not InnoDB in bad_copy"
-    assert_log_contains "mw_user_groups"
+    assert_log_contains "[ERROR] ✗ Tables not InnoDB in bad_copy:"
+    assert_log_contains "  mw_user_groups	MyISAM"
 }
 
 test_verify_reports_row_count() {
@@ -616,7 +619,7 @@ test_verify_reports_row_count() {
     sql -e "DELETE FROM bad_copy.titles WHERE title_id = 2"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "titles: 5 rows in isfdb, 4 in bad_copy"
+    assert_log_contains "[ERROR] ✗ titles: 5 rows in isfdb, 4 in bad_copy"
 }
 
 test_verify_reports_failed_source_row_count() {
@@ -652,7 +655,7 @@ test_verify_reports_changed_datetime_zero() {
     sql -e "UPDATE bad_copy.submissions SET sub_time = '2001-01-01 00:00:00' WHERE sub_id = 1"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "submissions.sub_time: 1 zero or partial dates in isfdb, 0 in bad_copy"
+    assert_log_contains "[ERROR] ✗ submissions.sub_time: 1 zero or partial dates in isfdb, 0 in bad_copy"
 }
 
 test_verify_reports_changed_partial_date() {
@@ -661,7 +664,7 @@ test_verify_reports_changed_partial_date() {
     sql -e "SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'; UPDATE bad_copy.authors SET author_birthdate = '1901-01-01' WHERE author_id = 2"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "authors.author_birthdate: 1 zero or partial dates in isfdb, 0 in bad_copy"
+    assert_log_contains "[ERROR] ✗ authors.author_birthdate: 1 zero or partial dates in isfdb, 0 in bad_copy"
 }
 
 # =====================================================
