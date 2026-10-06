@@ -86,7 +86,6 @@ prepare_scratch_database() {
     local mysql_cmd="$1"
     local scratch_db="$2"
 
-    print_step "Preparing ${CYAN}${scratch_db}${NC}..."
     ${mysql_cmd} -e "
         ${NO_BINLOG}
         DROP DATABASE IF EXISTS \`${scratch_db}\`;
@@ -492,8 +491,9 @@ main() {
     print_header "Copying Tables"
     START_TIME=$(date +%s)
 
-    prepare_scratch_database "${MYSQL_CMD}" "${SCRATCH_DB}" || {
-        print_error "Failed to prepare ${CYAN}${SCRATCH_DB}${NC}"
+    print_step "Preparing ${CYAN}${SCRATCH_DB}${NC}..."
+    PREPARE_OUTPUT=$(prepare_scratch_database "${MYSQL_CMD}" "${SCRATCH_DB}") || {
+        print_error "Failed to prepare ${CYAN}${SCRATCH_DB}${NC}: ${PREPARE_OUTPUT}"
         exit 1
     }
     copy_tables "${MYSQL_CMD}" "${SOURCE_DB}" "${SCRATCH_DB}" "${SOURCE_TABLES}" || exit 1

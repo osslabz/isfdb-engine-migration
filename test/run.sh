@@ -333,8 +333,7 @@ test_missing_privilege_changes_nothing() {
 
     run_script_as copier copier_pwd dynamic_migration.sh --yes
     assert_eq "exit code" 1 "$?"
-    assert_log_contains "ERROR 1227 (42000) at line 2: Access denied; you need (at least one of) the SUPER, SYSTEM_VARIABLES_ADMIN or SESSION_VARIABLES_ADMIN privilege(s) for this operation"
-    assert_log_contains "[ERROR] Failed to prepare isfdb_innodb_next"
+    assert_log_contains "[ERROR] Failed to prepare isfdb_innodb_next: ERROR 1227 (42000) at line 2: Access denied; you need (at least one of) the SUPER, SYSTEM_VARIABLES_ADMIN or SESSION_VARIABLES_ADMIN privilege(s) for this operation"
     assert_no_database isfdb_innodb_next
     assert_no_database isfdb_innodb
 }
