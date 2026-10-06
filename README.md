@@ -111,7 +111,7 @@ importer's job. isbn-bff sets it in `infra/isfdb/isfdb.cnf`.
 
 Before the swap the script checks `<target>_next` against the source:
 
-- the same tables, by name;
+- the same base tables, by name (views are not compared);
 - every table InnoDB;
 - the same row count per table, by `COUNT(*)`, because `TABLE_ROWS` is only an estimate for InnoDB;
 - per `date`, `datetime` and `timestamp` column, the same number of values with a zero year, month or day;
@@ -125,8 +125,9 @@ without a `pubs` table.
 
 The tables of `<target>` move to `<target>_old` and the tables of `<target>_next` move to `<target>`
 in one multi-table `RENAME TABLE`. That statement is atomic. Readers of `<target>` see the old tables or
-the new ones, never a mix. `<target>` ends up with exactly the copied tables. Both helper databases are
-dropped after the swap. The target is created first when it does not exist.
+the new ones, never a mix. `<target>` ends up with exactly the copied base tables. Views in `<target>` do
+not move and stay. A view named like a copied table makes the `RENAME TABLE` fail. Both helper databases
+are dropped after the swap. The target is created first when it does not exist.
 
 ### Failure behaviour
 
