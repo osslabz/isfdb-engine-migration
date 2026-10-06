@@ -1,22 +1,15 @@
 # isfdb-engine-migration
 
 Copies the Internet Speculative Fiction Database (ISFDB) from its imported MyISAM tables into a separate
-database with every table in InnoDB and every value unchanged. The source is only read. The repository
-also has two InnoDB maintenance helpers.
+database with every table in InnoDB and every value unchanged. The source is only read. The next pipeline
+step, `codelabz-net/isfdb-schema-migration`, reads InnoDB tables only. InnoDB is MySQL's default engine,
+transactional and crash-safe, and it locks rows instead of whole tables. The script copies instead of
+converting in place, so the imported `isfdb` stays as dumped and the script can compare the copy with it
+before it hands the copy on. The repository also has two InnoDB maintenance helpers.
 
 ```bash
 ./dynamic_migration.sh
 ```
-
-## Why
-
-The ISFDB backup is a MySQL dump. Almost all of its tables are MyISAM. The next pipeline step,
-`codelabz-net/isfdb-schema-migration`, reads InnoDB tables only. InnoDB is MySQL's default engine. It is
-transactional and crash-safe, and it locks rows instead of whole tables.
-
-The script copies and does not convert in place. The imported database `isfdb` stays as dumped. Each
-pipeline step keeps its input, so its output can be compared with it after every step. This script
-compares its own copy with `isfdb` before it hands the copy on.
 
 ## Pipeline
 
