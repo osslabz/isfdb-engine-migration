@@ -410,6 +410,7 @@ test_optimize_fails_without_database() {
 
 test_analyze_defaults_to_innodb_copy() {
     run_migration
+    assert_eq "migration exit code" 0 "$?"
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
     assert_eq "exit code" 0 "$?"
     assert_log_contains "Found 5 InnoDB tables"
@@ -423,6 +424,7 @@ test_analyze_takes_database() {
 
 test_optimize_defaults_to_innodb_copy() {
     run_migration
+    assert_eq "migration exit code" 0 "$?"
     run_script_as root "$ROOT_PASSWORD" optimize_innodb.sh --yes
     assert_eq "exit code" 0 "$?"
     assert_log_contains "Found 5 InnoDB tables"
@@ -436,6 +438,7 @@ test_optimize_takes_database() {
 
 test_helpers_print_no_buffer_pool_advice() {
     run_migration
+    assert_eq "migration exit code" 0 "$?"
     : > "$(log_file)"
     run_script_as root "$ROOT_PASSWORD" analyze_innodb.sh --yes
     assert_eq "analyze exit code" 0 "$?"
@@ -483,6 +486,7 @@ test_rewritten_source_keeps_old_target() {
 
 test_verify_accepts_exact_copy() {
     run_migration --target good_copy
+    assert_eq "migration exit code" 0 "$?"
     run_verify isfdb good_copy
     assert_eq "exit code" 0 "$?"
     assert_log_contains "good_copy.pubs.pub_year keeps 4 partial dates"
@@ -490,6 +494,7 @@ test_verify_accepts_exact_copy() {
 
 test_verify_reports_missing_table() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "DROP TABLE bad_copy.authors"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
@@ -498,6 +503,7 @@ test_verify_reports_missing_table() {
 
 test_verify_reports_extra_table() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "CREATE TABLE bad_copy.extra (id int) ENGINE = InnoDB"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
@@ -512,6 +518,7 @@ test_verify_fails_when_listing_fails() {
 
 test_verify_reports_wrong_engine() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "ALTER TABLE bad_copy.mw_user_groups ENGINE = MyISAM"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
@@ -521,6 +528,7 @@ test_verify_reports_wrong_engine() {
 
 test_verify_reports_row_count() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "DELETE FROM bad_copy.titles WHERE title_id = 2"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
@@ -529,6 +537,7 @@ test_verify_reports_row_count() {
 
 test_verify_reports_changed_datetime_zero() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "UPDATE bad_copy.submissions SET sub_time = '2001-01-01 00:00:00' WHERE sub_id = 1"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
@@ -537,6 +546,7 @@ test_verify_reports_changed_datetime_zero() {
 
 test_verify_reports_changed_partial_date() {
     run_migration --target bad_copy
+    assert_eq "migration exit code" 0 "$?"
     sql -e "SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'; UPDATE bad_copy.authors SET author_birthdate = '1901-01-01' WHERE author_id = 2"
     run_verify isfdb bad_copy
     assert_eq "exit code" 1 "$?"
